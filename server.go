@@ -21,6 +21,7 @@ type Server struct {
 
 	// raft related
 	Replicas []*Replica
+	Majority int
 	CurrentTerm int
 	State string
 	VotedFor bool
@@ -36,7 +37,7 @@ type Server struct {
 * Voting functions
 */
 // can vote if I haven't voted before and the message term is >= mine
-func (s *Server) RespondToRequestVote(voteRequest *RaftMessage) RaftMessage {
+func (s *Server) RespondToRequestVote(voteRequest RaftMessage) RaftMessage {
 	// if stale term, reject it
 	if s.CurrentTerm > voteRequest.Term {
 		return CreateVoteResponse(s.CurrentTerm, s.Pid, false)
@@ -61,7 +62,7 @@ func (s *Server) RespondToRequestVote(voteRequest *RaftMessage) RaftMessage {
 /*
 * Append Entry functions
 */
-func (s *Server) RespondToAppendEntry(appendEntryRequest *AppendEntriesMessage) RaftMessage {
+func (s *Server) RespondToAppendEntry(appendEntryRequest RaftMessage) RaftMessage {
 	// if stale term, reject it
 	if s.CurrentTerm > appendEntryRequest.Term {
 		return CreateAppendEntriesResponse(s.CurrentTerm, s.Pid, false)
@@ -114,16 +115,54 @@ func (s *Server) Execute(value string) {
 	log.Append(entry)
 
 	// send appendEntry messages to each replica
-	response := make(chan bool)
+	response := make(chan RaftMessage)
 	go func() {
 		for _, r := range s.Replicas {
-			appendEntryRequest := &AppendEntriesMessage{s.CurrentTerm, s.Pid, prevLogIndex, prevLogTerm, []log.Entry{entry}, leaderCommit}
-			r.SendAppendRequest(appendEntryRequest)
+			appendEntryRequest := CreateAppendEntriesMessage(s.CurrentTerm, s.Pid, prevLogIndex, prevLogTerm, []log.Entry{entry}, leaderCommit)
+			r.SendRaftMessage(appendEntryRequest, response)
 		}
 	}()
 
-	select {
-		case <-response: {
+	for {
+		select {
+			case msg := <-response: {
+				util.P_out("%v", msg)
+			}
+		}
+	}
+}
+
+/*
+*	Trigger election
+*/
+func (s *Server) InitiateElection() {
+	s.State = CANDIDATE
+	s.CurrentTerm++
+	response := make(chan RaftMessage)
+	go func() {
+		for _, r := range s.Replicas {
+			util.P_out("sending vote request to %v", r.HostAddress)
+			voteRequest := CreateVoteRequestMessage(s.CurrentTerm, s.Pid, 0, 0)	//TODO
+			r.SendRaftMessage(voteRequest, response)
+		}
+	}()
+
+	s.VotedFor = true	// i voted for myself
+	numVotes := 1
+	for s.state == CANDIDATE {
+		select {
+			case msg := <-response: {
+				util.P_out("initiate election: %v", msg)
+				switch msg.Type {
+					case VOTE_RES: {
+						numVotes++
+					}
+				}
+			}
+		}
+		if numVotes > s.Majority {
+			util.P_out("Yahoo!")
+			break
 		}
 	}
 }
@@ -138,6 +177,7 @@ func (s *Server) Init(Name string, Pid int, HostAddress util.Endpoint, ElectionT
 	s.HostAddress = HostAddress
 	s.Timeout = ElectionTimeout
 	s.HeartbeatTimeout = 2
+	s.State = FOLLOWER
 
 	s.Timer = &ElectionTimer{}
 	s.Timer.Init()
@@ -150,6 +190,7 @@ func (s *Server) Init(Name string, Pid int, HostAddress util.Endpoint, ElectionT
 	for _, e := range endpoints {
 		s.Replicas = append(s.Replicas, CreateReplica(e))
 	}
+	s.Majority = len(endpoints) / 2 + 1
 }
 
 
@@ -160,10 +201,32 @@ func (s *Server) Start() {
 		select {
 			case <-s.Timer.TimeoutEvent: {
 				util.P_out("time's up!")
+				if s.State == FOLLOWER {
+					s.InitiateElection()
+				}
 				s.Timer.Reset(s.Timeout)
 				s.Timer.TimeoutAck <- true
 			}
-			case <-s.Sresponder.ReceiveEvent: {
+			case msg := <-s.Sresponder.ReceiveEvent: {
+				util.P_out("received raft message!: %v", msg)
+				var reply RaftMessage
+				switch msg.Type {
+					case APPENDENTRIES_REQ: {
+						s.Timer.Reset(s.Timeout)
+						reply = s.RespondToAppendEntry(msg)
+					}
+					case APPENDENTRIES_RES: {
+						util.P_out("received appendEntry response!: %v", msg)
+					}
+					case VOTE_REQ: {
+						s.Timer.Reset(s.Timeout)
+						reply = s.RespondToRequestVote(msg)
+					}
+					case VOTE_RES: {
+						util.P_out("received vote response!: %v", msg)
+					}
+				}
+				s.Sresponder.SendChannel <- reply
 			}
 		}
 	}
