@@ -24,3 +24,6 @@ func CreateReplica(addr util.Endpoint) *Replica {
 
 	return r
 }
+
+func (r *Replica) SendAppendRequest(req *AppendEntriesMessage) {
+}
