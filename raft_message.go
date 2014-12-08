@@ -2,6 +2,7 @@ package main
 
 import (
 	"raft/log"
+	"encoding/json"
 )
 
 const (
@@ -32,6 +33,17 @@ type RaftMessage struct {
 
 	VoteGranted bool
 
+}
+
+func (r RaftMessage) ToJson() string {
+	jsonStr, _ := json.Marshal(r)
+	return string(jsonStr[:])
+}
+
+func FromJson(s string) RaftMessage {
+	m := RaftMessage{}
+	json.Unmarshal([]byte(s), &m)
+	return m
 }
 
 func CreateAppendEntriesMessage(term int, pid int, prevLogIndex int, prevLogTerm int, entries []log.Entry, leaderCommit int) RaftMessage {

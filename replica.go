@@ -2,6 +2,7 @@ package main
 
 import (
 	"raft/util"
+	zmq "github.com/pebbe/zmq4"
 )
 
 
@@ -12,6 +13,7 @@ type Replica struct {
 	VoteGranted bool
 	NextIndex int
 	MatchIndex int
+
 }
 
 func CreateReplica(addr util.Endpoint) *Replica {
@@ -25,5 +27,16 @@ func CreateReplica(addr util.Endpoint) *Replica {
 	return r
 }
 
-func (r *Replica) SendAppendRequest(req *AppendEntriesMessage) {
+// cannot block
+func (r *Replica) SendRaftMessage(req RaftMessage, replyChan chan RaftMessage) {
+	go func() {
+		socket, _ := zmq.NewSocket(zmq.REQ)
+		socket.Connect(r.HostAddress.RepTcpFormat())
+
+		s := req.ToJson()
+		socket.Send(s, 0)
+		response, _ := socket.Recv(0)
+		msg := FromJson(response)
+		replyChan <- msg
+	}()
 }

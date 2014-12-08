@@ -8,8 +8,8 @@ import (
 )
 
 
-const MIN_ELECTION_TIMEOUT = 4
-const MAX_ELECTION_TIMEOUT = 8
+const MIN_ELECTION_TIMEOUT = 3
+const MAX_ELECTION_TIMEOUT = 4
 
 func main() {
 	namePtr := flag.String("name", "auto", "replica name")
