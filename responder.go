@@ -2,7 +2,6 @@ package main
 
 import (
 	zmq "github.com/pebbe/zmq4"
-	"raft/util"
 )
 
 type Responder struct {
@@ -19,7 +18,6 @@ func (r *Responder) Init(tcpAddr string) {
 		for {
 			byteRecv, _ := socket.Recv(0)
 			m := FromJson(byteRecv)
-			util.P_out("received stuff!:%v", m)
 
 			r.ReceiveEvent <-m
 			tosend := <-r.SendChannel

@@ -10,18 +10,24 @@ Theres basically two levels of logs at work here:
 
 import (
 	"raft/storage"
+	"raft/util"
 	"strconv"
 	"fmt"
+	"sync"
 )
 
 var Name string
 var commitIndex int
 var VolatileLog []Entry
+var dummy Entry
+var lock *sync.Mutex
 
 func Init(name string) {
 	Name = name
 	commitIndex = 0
-	VolatileLog = []Entry{}
+	dummy = Entry{-1, "DUMMY"}
+	VolatileLog = []Entry{dummy}
+	lock = &sync.Mutex{}
 
 	_, err := storage.Get(fmt.Sprintf("%s:size", Name))
 	if err != nil {
@@ -30,6 +36,8 @@ func Init(name string) {
 }
 
 func Append(entry Entry) bool {
+	lock.Lock()
+	defer lock.Unlock()
 	volatileLogSize := len(VolatileLog)
 	if volatileLogSize > 0 {
 		if VolatileLog[volatileLogSize - 1].Term > entry.Term {
@@ -41,6 +49,8 @@ func Append(entry Entry) bool {
 }
 
 func SetCommitIndex(idx int) bool {
+	lock.Lock()
+	defer lock.Unlock()
 	// no duplicate committing
 	if idx < commitIndex {
 		return false
@@ -61,18 +71,26 @@ func SetCommitIndex(idx int) bool {
 }
 
 func CommitIndex() int {
+	lock.Lock()
+	defer lock.Unlock()
 	return commitIndex
 }
 
 func NextIndex() int {
+	lock.Lock()
+	defer lock.Unlock()
 	return len(VolatileLog)
 }
 
 func Top() int {
+	lock.Lock()
+	defer lock.Unlock()
 	return len(VolatileLog) - 1
 }
 
 func TopTerm() int {
+	lock.Lock()
+	defer lock.Unlock()
 	if len(VolatileLog) == 0 {
 		return 0
 	} else {
@@ -80,24 +98,42 @@ func TopTerm() int {
 	}
 }
 
+func Stats() string {
+	return fmt.Sprintf("Log Stats:\nVolatileEntries:%v\nTop:%d\nNextIndex:%d\nCommitIndex:%d\n", VolatileLog, Top(), NextIndex(), CommitIndex())
+}
+
 /*
 * log = log[:idx] (if log[idx] isn't committed)
 */
 func Truncate(idx, term int) bool {
+	lock.Lock()
+	defer lock.Unlock()
+	util.P_out("after truncate: %v", VolatileLog)
 	if idx < commitIndex || idx > len(VolatileLog) {
 		return false
 	}
 
 	if idx > 0 {
-		if VolatileLog[idx - 1].Term != term {
+		if VolatileLog[idx].Term != term {
 			return false
 		} else {
 			VolatileLog = VolatileLog[:idx]
 		}
 	} else {
-		VolatileLog = []Entry{}
+		VolatileLog = []Entry{dummy}
 	}
+	util.P_out("after truncate: %v", VolatileLog)
 	return true
+}
+
+func GetTermFor(idx int) int {
+	lock.Lock()
+	defer lock.Unlock()
+	if idx > len(VolatileLog) || idx < 0 {
+		return -1
+	} else {
+		return VolatileLog[idx].Term
+	}
 }
 
 
