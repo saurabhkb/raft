@@ -5,11 +5,12 @@ import (
 	"flag"
 	"math/rand"
 	"time"
+	"fmt"
 )
 
 
-const MIN_ELECTION_TIMEOUT = 3
-const MAX_ELECTION_TIMEOUT = 4
+const MIN_ELECTION_TIMEOUT = 4
+const MAX_ELECTION_TIMEOUT = 6
 
 func main() {
 	namePtr := flag.String("name", "auto", "replica name")
@@ -22,7 +23,22 @@ func main() {
 	TIMER_DURATION := int(float32(MIN_ELECTION_TIMEOUT) + rand.Float32() * float32(MAX_ELECTION_TIMEOUT - MIN_ELECTION_TIMEOUT))
 	util.P_out("TIMER_DURATION: %d", TIMER_DURATION)
 
-	s := Server{}
-	s.Init(ServerName, Pid, HostAddress, TIMER_DURATION, EndpointList)
-	s.Start()
+	serverConnector := make(chan string)
+	serverAck := make(chan bool)
+
+	go func() {
+		s := Server{}
+		s.Init(ServerName, Pid, HostAddress, TIMER_DURATION, EndpointList, serverConnector, serverAck)
+		s.Start()
+	}()
+
+	// ideally, read stuff from a zmq socket; take from STDIN for now...
+	for {
+		var s string
+		fmt.Printf("Input:")
+		fmt.Scanf("%s", &s)
+		util.P_out("read: %s", s)
+		serverConnector <- s
+		<-serverAck
+	}
 }

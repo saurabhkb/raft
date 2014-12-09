@@ -21,7 +21,7 @@ func CreateReplica(addr util.Endpoint) *Replica {
 	r.HostAddress = addr
 	r.VoteResponded = false
 	r.VoteGranted = false
-	r.NextIndex = 0
+	r.NextIndex = 1
 	r.MatchIndex = 0
 
 	return r
@@ -39,4 +39,8 @@ func (r *Replica) SendRaftMessage(req RaftMessage, replyChan chan RaftMessage) {
 		msg := FromJson(response)
 		replyChan <- msg
 	}()
+}
+
+func (r *Replica) IncrNextIndex() {
+	r.NextIndex++
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"raft/log"
 	"encoding/json"
+	"fmt"
 )
 
 const (
@@ -33,6 +34,31 @@ type RaftMessage struct {
 
 	VoteGranted bool
 
+}
+
+func (r RaftMessage) String() string {
+	switch r.Type {
+		case APPENDENTRIES_REQ: {
+			s := fmt.Sprintf("APPENDENTRIES_REQ: Term:%d, FromPid:%d, prevLogIndex:%d, prevLogTerm:%d, leaderCommit:%d, entries:%v", r.Term, r.FromPid, r.PrevLogIndex, r.PrevLogTerm, r.LeaderCommit, r.Entries)
+			return s
+		}
+		case APPENDENTRIES_RES: {
+			s := fmt.Sprintf("APPENDENTRIES_RES: Term:%d, FromPid:%d, Success:%v", r.Term, r.FromPid, r.Success)
+			return s
+		}
+		case VOTE_REQ: {
+			s := fmt.Sprintf("VOTE_REQ: Term:%d, FromPid:%d, LastLogIndex:%d, LastLogTerm:%d", r.Term, r.FromPid, r.LastLogIndex, r.LastLogTerm)
+			return s
+		}
+		case VOTE_RES: {
+			s := fmt.Sprintf("VOTE_RES: Term:%d, FromPid:%d, VoteGranted:%v", r.Term, r.FromPid, r.VoteGranted)
+			return s
+		}
+		default: {
+			s := fmt.Sprintf("Unknown Message Type: %v", r.Type)
+			return s
+		}
+	}
 }
 
 func (r RaftMessage) ToJson() string {
