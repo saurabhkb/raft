@@ -24,15 +24,22 @@ var lock *sync.Mutex
 
 func Init(name string) {
 	Name = name
-	commitIndex = 0
 	dummy = Entry{-1, "DUMMY"}
 	VolatileLog = []Entry{dummy}
 	lock = &sync.Mutex{}
 
-	_, err := storage.Get(fmt.Sprintf("%s:size", Name))
+	sizeStr, err := storage.Get(fmt.Sprintf("%s:size", Name))
+	_size, _ := strconv.Atoi(sizeStr)
 	if err != nil {
 		storage.Put(fmt.Sprintf("%s:size", Name), "0")
 	}
+
+	// reload saved log
+	for i := 1; i <= _size; i++ {
+		VolatileLog = append(VolatileLog, Get(i))
+	}
+	commitIndex = size()
+	util.P_out("Reloaded log: %v, commit index: %d", VolatileLog, commitIndex)
 }
 
 func Append(entry Entry) bool {
@@ -64,6 +71,7 @@ func SetCommitIndex(idx int) bool {
 	for i, entry := range VolatileLog {
 		if i > commitIndex && i <= idx {
 			Put(idx, entry)
+			IncrSize()
 			commitIndex = idx
 		}
 	}
@@ -99,7 +107,15 @@ func TopTerm() int {
 }
 
 func Stats() string {
-	return fmt.Sprintf("Log Stats:\nVolatileEntries:%v\nTop:%d\nNextIndex:%d\nCommitIndex:%d\n", VolatileLog, Top(), NextIndex(), CommitIndex())
+	return fmt.Sprintf("Log Stats:\nVolatileEntries:%v\nSaved:%v\nTop:%d\nNextIndex:%d\nCommitIndex:%d\n", VolatileLog, Saved(), Top(), NextIndex(), CommitIndex())
+}
+
+func Saved() []Entry {
+	l := []Entry{}
+	for i := 0; i <= size(); i++ {
+		l = append(l, Get(i))
+	}
+	return l
 }
 
 /*
@@ -108,8 +124,8 @@ func Stats() string {
 func Truncate(idx, term int) bool {
 	lock.Lock()
 	defer lock.Unlock()
-	util.P_out("after truncate: %v", VolatileLog)
-	if idx < commitIndex || idx > len(VolatileLog) {
+	util.P_out("before truncate: %v", VolatileLog)
+	if idx < commitIndex || idx > len(VolatileLog) - 1 {	// can't use Top (it deadlocks)
 		return false
 	}
 
@@ -117,7 +133,7 @@ func Truncate(idx, term int) bool {
 		if VolatileLog[idx].Term != term {
 			return false
 		} else {
-			VolatileLog = VolatileLog[:idx]
+			VolatileLog = VolatileLog[:idx + 1]	// include idx in the thing to be kept
 		}
 	} else {
 		VolatileLog = []Entry{dummy}
@@ -129,11 +145,23 @@ func Truncate(idx, term int) bool {
 func GetTermFor(idx int) int {
 	lock.Lock()
 	defer lock.Unlock()
-	if idx > len(VolatileLog) || idx < 0 {
+	if idx >= len(VolatileLog) || idx < 0 {
 		return -1
 	} else {
 		return VolatileLog[idx].Term
 	}
+}
+
+func GetEntriesAfter(idx int) []Entry {
+	list := []Entry{}
+	if idx < 0 || idx > Top() {
+		return []Entry{}
+	} else {
+		for i := idx + 1; i <= Top(); i++ {
+			list = append(list, VolatileLog[i])
+		}
+	}
+	return list
 }
 
 
@@ -150,10 +178,10 @@ func Put(idx int, entry Entry) {
 	storage.Put(fmt.Sprintf("%s:%d", Name, idx), toJson(entry))
 }
 
-func Size() int {
+func size() int {
 	ret, _ := storage.Get(fmt.Sprintf("%s:size", Name))
-	size, _ := strconv.Atoi(ret)
-	return size
+	_size, _ := strconv.Atoi(ret)
+	return _size
 }
 
 func IncrSize() {
@@ -165,4 +193,8 @@ func IncrSize() {
 	} else {
 		storage.Put(fmt.Sprintf("%s:size", Name), "1")
 	}
+}
+
+func Close() {
+	storage.Close()
 }

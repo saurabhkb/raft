@@ -5,6 +5,8 @@ import (
 	"raft/util"
 	"raft/storage"
 	"sync"
+	"sort"
+	"fmt"
 )
 
 const (
@@ -37,6 +39,18 @@ type Server struct {
 
 	ClientInterface chan string
 	ClientAck chan bool
+
+	Syncs int
+
+	messageCounter int
+}
+
+/*
+* Message Id
+*/
+func (s *Server) MessageId() string {
+	s.messageCounter++
+	return fmt.Sprintf("%s:%d", s.Name, s.messageCounter)
 }
 
 /*
@@ -62,7 +76,7 @@ func (s *Server) SetState(st string) {
 func (s *Server) RespondToRequestVote(voteRequest RaftMessage) RaftMessage {
 	// if stale term, reject it
 	if s.CurrentTerm > voteRequest.Term {
-		return CreateVoteResponse(s.CurrentTerm, s.Pid, false)
+		return CreateVoteResponse(voteRequest.Id, s.CurrentTerm, s.Pid, false)
 	}
 
 	// if term is newer than ours, update our term and demote self to follower
@@ -74,10 +88,10 @@ func (s *Server) RespondToRequestVote(voteRequest RaftMessage) RaftMessage {
 	// if i haven't voted yet
 	if !s.VotedFor {
 		s.VotedFor = true
-		return CreateVoteResponse(s.CurrentTerm, s.Pid, true)
+		return CreateVoteResponse(voteRequest.Id, s.CurrentTerm, s.Pid, true)
 	}
 
-	return CreateVoteResponse(s.CurrentTerm, s.Pid, false)
+	return CreateVoteResponse(voteRequest.Id, s.CurrentTerm, s.Pid, false)
 }
 
 
@@ -88,7 +102,7 @@ func (s *Server) RespondToAppendEntry(appendEntryRequest RaftMessage) RaftMessag
 	// if stale term, reject it
 	if s.CurrentTerm > appendEntryRequest.Term {
 		util.P_out("stale term: %d > %d", s.CurrentTerm, appendEntryRequest.Term)
-		return CreateAppendEntriesResponse(s.CurrentTerm, s.Pid, false)
+		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, false)
 	}
 
 	// if term is newer than ours, update our term and demote self to follower
@@ -98,6 +112,7 @@ func (s *Server) RespondToAppendEntry(appendEntryRequest RaftMessage) RaftMessag
 
 	s.Timer.Reset(s.Timeout)
 	s.SetState(FOLLOWER)
+	s.VotedFor = false
 
 	// reset timer
 	s.Timer.Reset(s.Timeout)
@@ -105,39 +120,62 @@ func (s *Server) RespondToAppendEntry(appendEntryRequest RaftMessage) RaftMessag
 	success := log.Truncate(appendEntryRequest.PrevLogIndex, appendEntryRequest.PrevLogTerm)
 	if !success {
 		util.P_out("cannot truncate properly")
-		return CreateAppendEntriesResponse(s.CurrentTerm, s.Pid, false)
+		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, false)
 	}
 
 	for i := 0; i < len(appendEntryRequest.Entries); i++ {
 		success = log.Append(appendEntryRequest.Entries[i])
 		if !success {
 		util.P_out("cannot append properly")
-			return CreateAppendEntriesResponse(s.CurrentTerm, s.Pid, false)
+			return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, false)
 		}
 	}
 
 	success = log.SetCommitIndex(appendEntryRequest.LeaderCommit)
 	if !success {
 		util.P_out("")
-		return CreateAppendEntriesResponse(s.CurrentTerm, s.Pid, false)
+		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, false)
 	}
 
 	util.P_out("%s", log.Stats())
-	return CreateAppendEntriesResponse(s.CurrentTerm, s.Pid, true)
+	return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, true)
 }
 
-func (s *Server) RespondToAppendEntryResponse(appendEntryResponse RaftMessage) {
+// TODO not sure about the bool
+func (s *Server) RespondToAppendEntryResponse(appendEntryResponse RaftMessage) bool {
 	// if term is newer than ours, update our term and demote self to follower
 	if appendEntryResponse.Term > s.CurrentTerm {
 		s.CurrentTerm = appendEntryResponse.Term
 		s.SetState(FOLLOWER)
 		s.Timer.Reset(s.Timeout)
+		s.VotedFor = false
+		return true
 	} else {
 		if appendEntryResponse.Success {
-			r.NextIndex++
-		} else {
-			r.NextIndex--
+			s.Syncs++
+
+			if s.Syncs < s.Majority {
+				return false
+			}
+
+			var indices []int
+			indices = append(indices, log.Top())
+			for _, r := range s.Replicas {
+				indices = append(indices, r.GetMatchIndex())
+			}
+			sort.Ints(indices)
+			util.P_out("indices: %v", indices)
+
+			c_idx := indices[s.Majority - 1]
+			if c_idx > log.CommitIndex() {
+				ret := log.SetCommitIndex(c_idx)
+				util.P_out("setting commit index to: %d (%v)", c_idx, ret)
+			}
+			util.P_out(":::::::::::::::: true!")
+			return true
 		}
+		util.P_out("returning false , failure")
+		return false
 	}
 }
 
@@ -158,13 +196,16 @@ func (s *Server) Execute(value string) {
 	leaderCommit := log.CommitIndex()
 	log.Append(entry)
 
+	// our own
+	s.Syncs = 1
+
 	// send appendEntry messages to each replica
 	response := make(chan RaftMessage)
 	go func() {
 		for _, r := range s.Replicas {
-			prevLogIndex := r.NextIndex - 1
+			prevLogIndex := log.Top() - 1	// if replica hasn't caught up, it will fail
 			prevLogTerm := log.GetTermFor(prevLogIndex)
-			appendEntryRequest := CreateAppendEntriesMessage(s.CurrentTerm, s.Pid, prevLogIndex, prevLogTerm, []log.Entry{entry}, leaderCommit)
+			appendEntryRequest := CreateAppendEntriesMessage(s.MessageId(), s.CurrentTerm, s.Pid, prevLogIndex, prevLogTerm, []log.Entry{entry}, leaderCommit)
 			r.SendRaftMessage(appendEntryRequest, response)
 		}
 	}()
@@ -173,7 +214,10 @@ func (s *Server) Execute(value string) {
 		select {
 			case msg := <-response: {
 				util.P_out("%v", msg)
-				s.RespondToAppendEntryResponse(msg)
+				if s.RespondToAppendEntryResponse(msg) {
+					util.P_out("BREAKING>>>>>>>>>>>>>>>>>>>>>>>>>")
+					return
+				}
 			}
 			case <-s.Timer.TimeoutEvent: {
 				util.P_out("heartbeat!")
@@ -182,10 +226,18 @@ func (s *Server) Execute(value string) {
 				go func() {
 					for _, r := range s.Replicas {
 						util.P_out("sending heartbeat to %v", r.HostAddress)
-						prevLogIndex := log.Top()
-						prevLogTerm := log.TopTerm()
+						// prevLogIndex := log.Top()
+						// prevLogTerm := log.TopTerm()
+						// leaderCommit := log.CommitIndex()
+						// heartbeat := CreateAppendEntriesMessage(s.MessageId(), s.CurrentTerm, s.Pid, prevLogIndex, prevLogTerm, []log.Entry{}, leaderCommit)
+
+						// replacing above with replica specific stuff
+						prevLogIndex := r.GetMatchIndex()
+						prevLogTerm := log.GetTermFor(prevLogIndex)
 						leaderCommit := log.CommitIndex()
-						heartbeat := CreateAppendEntriesMessage(s.CurrentTerm, s.Pid, prevLogIndex, prevLogTerm, []log.Entry{}, leaderCommit)
+						entries := log.GetEntriesAfter(prevLogIndex)
+						heartbeat := CreateAppendEntriesMessage(s.MessageId(), s.CurrentTerm, s.Pid, prevLogIndex, prevLogTerm, entries, leaderCommit)
+
 						r.SendRaftMessage(heartbeat, response)
 					}
 				}()
@@ -194,6 +246,7 @@ func (s *Server) Execute(value string) {
 			}
 		}
 	}
+	util.P_out(">>>>>>>>>>>> RETURNING")
 }
 
 /*
@@ -206,7 +259,7 @@ func (s *Server) CandidateStart() {
 	go func() {
 		for _, r := range s.Replicas {
 			util.P_out("sending vote request to %v", r.HostAddress)
-			voteRequest := CreateVoteRequestMessage(s.CurrentTerm, s.Pid, 0, 0)	//TODO
+			voteRequest := CreateVoteRequestMessage(s.MessageId(), s.CurrentTerm, s.Pid, 0, 0)	//TODO
 			r.SendRaftMessage(voteRequest, response)
 		}
 	}()
@@ -221,6 +274,13 @@ func (s *Server) CandidateStart() {
 					case VOTE_RES: {
 						if msg.VoteGranted {
 							numVotes++
+							util.P_out("got vote! numVotes is now: %d", numVotes)
+
+							if numVotes >= s.Majority {
+								util.P_out("Yahoo!")
+								s.SetState(LEADER)
+								return
+							}
 						} else {
 							if s.CurrentTerm < msg.Term {
 								s.SetState(FOLLOWER)
@@ -234,17 +294,19 @@ func (s *Server) CandidateStart() {
 			case <-s.Timer.TimeoutEvent: {
 				util.P_out("timeout!")
 				s.Timer.Reset(s.Timeout)
+				s.Timer.TimeoutAck <- true
 			}
 			case msg := <-s.ClientInterface: {
 				util.P_out("Not the leader, returning... %s", msg)
 				s.ClientAck <- false
 			}
 		}
-		if numVotes > s.Majority {
-			util.P_out("Yahoo!")
-			s.SetState(LEADER)
-			break
-		}
+		// was initially here but break simply breaks out of the switch, not the for
+		// if numVotes > s.Majority {
+		// 	util.P_out("Yahoo!")
+		// 	s.SetState(LEADER)
+		// 	break
+		// }
 	}
 }
 
@@ -266,10 +328,12 @@ func (s *Server) LeaderStart() {
 				go func() {
 					for _, r := range s.Replicas {
 						util.P_out("sending heartbeat to %v", r.HostAddress)
-						prevLogIndex := log.Top()
-						prevLogTerm := log.TopTerm()
+						prevLogIndex := r.GetMatchIndex()
+						// prevLogTerm := log.TopTerm()
+						prevLogTerm := log.GetTermFor(prevLogIndex)
 						leaderCommit := log.CommitIndex()
-						heartbeat := CreateAppendEntriesMessage(s.CurrentTerm, s.Pid, prevLogIndex, prevLogTerm, []log.Entry{}, leaderCommit)
+						entries := log.GetEntriesAfter(prevLogIndex)
+						heartbeat := CreateAppendEntriesMessage(s.MessageId(), s.CurrentTerm, s.Pid, prevLogIndex, prevLogTerm, entries, leaderCommit)
 						r.SendRaftMessage(heartbeat, response)
 					}
 				}()
@@ -300,6 +364,7 @@ func (s *Server) LeaderStart() {
 			case val := <-s.ClientInterface: {
 				util.P_out("I am the leader, going to do something... %s", val)
 				s.Execute(val)
+				util.P_out("done executing ====================================")
 				s.ClientAck <- true
 			}
 		}

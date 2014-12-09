@@ -15,6 +15,7 @@ const (
 )
 
 type RaftMessage struct {
+	Id string
 	Type string
 
 	Term int
@@ -39,19 +40,19 @@ type RaftMessage struct {
 func (r RaftMessage) String() string {
 	switch r.Type {
 		case APPENDENTRIES_REQ: {
-			s := fmt.Sprintf("APPENDENTRIES_REQ: Term:%d, FromPid:%d, prevLogIndex:%d, prevLogTerm:%d, leaderCommit:%d, entries:%v", r.Term, r.FromPid, r.PrevLogIndex, r.PrevLogTerm, r.LeaderCommit, r.Entries)
+			s := fmt.Sprintf("APPENDENTRIES_REQ (%s): Term:%d, FromPid:%d, prevLogIndex:%d, prevLogTerm:%d, leaderCommit:%d, entries:%v", r.Id, r.Term, r.FromPid, r.PrevLogIndex, r.PrevLogTerm, r.LeaderCommit, r.Entries)
 			return s
 		}
 		case APPENDENTRIES_RES: {
-			s := fmt.Sprintf("APPENDENTRIES_RES: Term:%d, FromPid:%d, Success:%v", r.Term, r.FromPid, r.Success)
+			s := fmt.Sprintf("APPENDENTRIES_RES (%s): Term:%d, FromPid:%d, Success:%v", r.Id, r.Term, r.FromPid, r.Success)
 			return s
 		}
 		case VOTE_REQ: {
-			s := fmt.Sprintf("VOTE_REQ: Term:%d, FromPid:%d, LastLogIndex:%d, LastLogTerm:%d", r.Term, r.FromPid, r.LastLogIndex, r.LastLogTerm)
+			s := fmt.Sprintf("VOTE_REQ (%s): Term:%d, FromPid:%d, LastLogIndex:%d, LastLogTerm:%d", r.Id, r.Term, r.FromPid, r.LastLogIndex, r.LastLogTerm)
 			return s
 		}
 		case VOTE_RES: {
-			s := fmt.Sprintf("VOTE_RES: Term:%d, FromPid:%d, VoteGranted:%v", r.Term, r.FromPid, r.VoteGranted)
+			s := fmt.Sprintf("VOTE_RES (%s): Term:%d, FromPid:%d, VoteGranted:%v", r.Id, r.Term, r.FromPid, r.VoteGranted)
 			return s
 		}
 		default: {
@@ -72,8 +73,9 @@ func FromJson(s string) RaftMessage {
 	return m
 }
 
-func CreateAppendEntriesMessage(term int, pid int, prevLogIndex int, prevLogTerm int, entries []log.Entry, leaderCommit int) RaftMessage {
+func CreateAppendEntriesMessage(id string, term int, pid int, prevLogIndex int, prevLogTerm int, entries []log.Entry, leaderCommit int) RaftMessage {
 	message := RaftMessage{}
+	message.Id = id
 	message.Type = APPENDENTRIES_REQ
 	message.Term = term
 	message.FromPid = pid
@@ -84,8 +86,9 @@ func CreateAppendEntriesMessage(term int, pid int, prevLogIndex int, prevLogTerm
 	return message
 }
 
-func CreateAppendEntriesResponse(term int, pid int, success bool) RaftMessage {
+func CreateAppendEntriesResponse(id string, term int, pid int, success bool) RaftMessage {
 	m := RaftMessage{}
+	m.Id = id
 	m.Type = APPENDENTRIES_RES
 	m.Term = term
 	m.FromPid = pid
@@ -93,8 +96,9 @@ func CreateAppendEntriesResponse(term int, pid int, success bool) RaftMessage {
 	return m
 }
 
-func CreateVoteRequestMessage(term, pid, lastLogIndex, lastLogTerm int) RaftMessage {
+func CreateVoteRequestMessage(id string, term, pid, lastLogIndex, lastLogTerm int) RaftMessage {
 	m := RaftMessage{}
+	m.Id = id
 	m.Type = VOTE_REQ
 	m.Term = term
 	m.FromPid = pid
@@ -104,8 +108,9 @@ func CreateVoteRequestMessage(term, pid, lastLogIndex, lastLogTerm int) RaftMess
 }
 
 
-func CreateVoteResponse(term int, pid int, voteGranted bool) RaftMessage {
+func CreateVoteResponse(id string, term int, pid int, voteGranted bool) RaftMessage {
 	m := RaftMessage{}
+	m.Id = id
 	m.Type = VOTE_RES
 	m.Term = term
 	m.FromPid = pid

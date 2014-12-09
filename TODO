@@ -1,0 +1,5 @@
+something is wrong with set commit index i think.
+ive now made it so that commitIndex is initialized to the size of the loaded log, which ideally should help matters but this hasn't been tested.
+
+when a new server becomes the leader, it needs to set the next index for eahc replica to something
+should the append entries response include the commit index of the follower?
