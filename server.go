@@ -102,7 +102,7 @@ func (s *Server) RespondToAppendEntry(appendEntryRequest RaftMessage) RaftMessag
 	// if stale term, reject it
 	if s.CurrentTerm > appendEntryRequest.Term {
 		util.P_out("stale term: %d > %d", s.CurrentTerm, appendEntryRequest.Term)
-		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, false)
+		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, log.CommitIndex(), false)
 	}
 
 	// if term is newer than ours, update our term and demote self to follower
@@ -120,25 +120,25 @@ func (s *Server) RespondToAppendEntry(appendEntryRequest RaftMessage) RaftMessag
 	success := log.Truncate(appendEntryRequest.PrevLogIndex, appendEntryRequest.PrevLogTerm)
 	if !success {
 		util.P_out("cannot truncate properly")
-		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, false)
+		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, log.CommitIndex(), false)
 	}
 
 	for i := 0; i < len(appendEntryRequest.Entries); i++ {
 		success = log.Append(appendEntryRequest.Entries[i])
 		if !success {
 		util.P_out("cannot append properly")
-			return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, false)
+			return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, log.CommitIndex(), false)
 		}
 	}
 
 	success = log.SetCommitIndex(appendEntryRequest.LeaderCommit)
 	if !success {
 		util.P_out("")
-		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, false)
+		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, log.CommitIndex(), false)
 	}
 
 	util.P_out("%s", log.Stats())
-	return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, true)
+	return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, log.CommitIndex(), true)
 }
 
 // TODO not sure about the bool
