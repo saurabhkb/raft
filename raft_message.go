@@ -86,13 +86,14 @@ func CreateAppendEntriesMessage(id string, term int, pid int, prevLogIndex int, 
 	return message
 }
 
-func CreateAppendEntriesResponse(id string, term int, pid int, success bool) RaftMessage {
+func CreateAppendEntriesResponse(id string, term int, pid int, commitIndex int, success bool) RaftMessage {
 	m := RaftMessage{}
 	m.Id = id
 	m.Type = APPENDENTRIES_RES
 	m.Term = term
 	m.FromPid = pid
 	m.Success = success
+	m.LeaderCommit = commitIndex
 	return m
 }
 

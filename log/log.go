@@ -68,11 +68,13 @@ func SetCommitIndex(idx int) bool {
 		return false
 	}
 
+	util.P_out("attempting to set commit index as %d", idx)
 	for i, entry := range VolatileLog {
 		if i > commitIndex && i <= idx {
-			Put(idx, entry)
+			util.P_out("committing VolatileLog[%d] = %v", i, entry)
+			Put(i, entry)
 			IncrSize()
-			commitIndex = idx
+			commitIndex = i
 		}
 	}
 	return true
