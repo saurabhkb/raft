@@ -50,15 +50,13 @@ func SetConfigFile(configfile string) {
 		}
 		lineNumber += 1
 	}
+	P_out("CONFIG FILE STRUCT: %v", configFileStructure)
 }
 
-func ReadAllEndpoints(except Endpoint) []Endpoint {
+func ReadAllEndpoints(num int) []Endpoint {
 	endpoints := make([]Endpoint, 0)
-	for i := 0; i < len(configFileStructure); i++ {
+	for i := 0; i < len(configFileStructure) && i < num; i++ {
 		e := configFileStructure[i].HostAddress
-		if e == except {
-			continue
-		}
 		endpoints = append(endpoints, e)
 	}
 	P_out("Endpoints: %v", endpoints)
@@ -96,6 +94,15 @@ func GetEndpointFromPid(pid int) Endpoint {
 		}
 	}
 	return Endpoint{}
+}
+
+func GetPidFromEndpoint(endpoint Endpoint) int {
+	for i := 0; i < len(configFileStructure); i++ {
+		if endpoint == configFileStructure[i].HostAddress {
+			return configFileStructure[i].Pid
+		}
+	}
+	return -1
 }
 
 func getIP() (string, error) {

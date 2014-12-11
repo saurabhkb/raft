@@ -12,6 +12,9 @@ const (
 
 	VOTE_REQ = "VOTE_REQ"
 	VOTE_RES = "VOTE_RES"
+
+	CLIENT_SIZE_REQ = "CLIENT_SIZE_REQ"
+	CLIENT_SIZE_RES = "CLIENT_SIZE_RES"
 )
 
 type RaftMessage struct {
@@ -35,6 +38,9 @@ type RaftMessage struct {
 
 	VoteGranted bool
 
+	Size int
+	Nodes NodeMap
+
 }
 
 func (r RaftMessage) String() string {
@@ -55,8 +61,12 @@ func (r RaftMessage) String() string {
 			s := fmt.Sprintf("VOTE_RES (%s): Term:%d, FromPid:%d, VoteGranted:%v", r.Id, r.Term, r.FromPid, r.VoteGranted)
 			return s
 		}
+		case CLIENT_SIZE_REQ: {
+			s := fmt.Sprintf("CLIENT_SIZE_REQ: ToSize:%d, Nodes:%v", r.Size, r.Nodes)
+			return s
+		}
 		default: {
-			s := fmt.Sprintf("Unknown Message Type: %v", r.Type)
+			s := fmt.Sprintf("Unknown Message Type: |%v|", r.Type)
 			return s
 		}
 	}
@@ -116,6 +126,15 @@ func CreateVoteResponse(id string, term int, pid int, voteGranted bool) RaftMess
 	m.Term = term
 	m.FromPid = pid
 	m.VoteGranted = voteGranted
+	return m
+}
+
+func CreateClientSizeRequestMessage(id string, size int, nodeMap NodeMap) RaftMessage {
+	m := RaftMessage{}
+	m.Id = id
+	m.Type = CLIENT_SIZE_REQ
+	m.Size = size
+	m.Nodes = nodeMap
 	return m
 }
 

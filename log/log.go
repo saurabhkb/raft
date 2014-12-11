@@ -114,7 +114,7 @@ func Stats() string {
 
 func Saved() []Entry {
 	l := []Entry{}
-	for i := 0; i <= size(); i++ {
+	for i := 1; i <= size(); i++ {
 		l = append(l, Get(i))
 	}
 	return l

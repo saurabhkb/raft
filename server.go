@@ -24,8 +24,7 @@ type Server struct {
 
 	// raft related
 	Replicas []*Replica
-	Majority int
-	CurrentTerm int
+	currentTerm int
 
 	state string
 	Lock *sync.Mutex
@@ -40,9 +39,54 @@ type Server struct {
 	ClientInterface chan string
 	ClientAck chan bool
 
-	Syncs int
+	nodeReplyMap *BoolMap
 
 	messageCounter int
+
+	Config *Configuration
+	ConfigChangeNotifier chan RaftMessage
+}
+
+/*
+* Majority (accounting for joint consensus) -> does the passed nodemap constitute a quorum?
+*/
+func (s *Server) IsMajority(nmap *BoolMap) bool {
+	currentOld := 0
+	quorumOld := s.Config.OldConfig.Majority()
+	currentNew := 0
+	quorumNew := s.Config.NewConfig.Majority()
+
+	for _, id := range s.Config.GetOldConfigPids() {
+		if ret, found := nmap.Get(id); found && ret {
+			currentOld++
+		}
+	}
+	for _, id := range s.Config.GetNewConfigPids() {
+		if ret, found := nmap.Get(id); found && ret {
+			currentNew++
+		}
+	}
+	if s.Config.State() == C_OLD {
+		util.P_out("currentOld:%d, quorumOld:%d, old:%v", currentOld, quorumOld, s.Config.OldConfig)
+		return currentOld >= quorumOld
+	}
+	if s.Config.State() == C_OLD_NEW {
+		if currentNew >= quorumNew {
+			util.P_out("=====> PASSED THE NEW CONFIGURATION QUORUM!")
+		} else {
+			util.P_out("=====> FAILED THE NEW CONFIGURATION QUORUM!")
+		}
+		if currentOld >= quorumOld {
+			util.P_out("=====> PASSED THE OLD CONFIGURATION QUORUM!")
+		} else {
+			util.P_out("=====> FAILED THE OLD CONFIGURATION QUORUM!")
+		}
+		return (currentNew >= quorumNew) && (currentOld >= quorumOld)
+	}
+	if s.Config.State() == C_NEW {
+		return currentNew >= quorumNew
+	}
+	return false
 }
 
 /*
@@ -68,6 +112,18 @@ func (s *Server) SetState(st string) {
 	s.state = st
 }
 
+func (s *Server) CurrentTerm() int {
+	s.Lock.Lock()
+	defer s.Lock.Unlock()
+	return s.currentTerm
+}
+
+func (s *Server) SetCurrentTerm(trm int) {
+	s.Lock.Lock()
+	defer s.Lock.Unlock()
+	s.currentTerm = trm
+}
+
 
 /*
 * Voting functions
@@ -75,23 +131,29 @@ func (s *Server) SetState(st string) {
 // can vote if I haven't voted before and the message term is >= mine
 func (s *Server) RespondToRequestVote(voteRequest RaftMessage) RaftMessage {
 	// if stale term, reject it
-	if s.CurrentTerm > voteRequest.Term {
-		return CreateVoteResponse(voteRequest.Id, s.CurrentTerm, s.Pid, false)
+	if s.CurrentTerm() > voteRequest.Term {
+		return CreateVoteResponse(voteRequest.Id, s.CurrentTerm(), s.Pid, false)
 	}
 
 	// if term is newer than ours, update our term and demote self to follower
-	if s.CurrentTerm < voteRequest.Term {
+	if s.CurrentTerm() < voteRequest.Term {
 		s.SetState(FOLLOWER)
-		s.CurrentTerm = voteRequest.Term
+		s.SetCurrentTerm(voteRequest.Term)
+	}
+
+	// if the candidate's last log index is not at least as up to date as our own, reject
+	if log.Top() > voteRequest.LastLogIndex || log.TopTerm() > voteRequest.LastLogTerm {
+		util.P_out("!!!!!!!!!!! CANT VOTE FOR YOU! You aren't as recent as me!: %v", util.GetEndpointFromPid(voteRequest.FromPid))
+		return CreateVoteResponse(voteRequest.Id, s.CurrentTerm(), s.Pid, false)
 	}
 
 	// if i haven't voted yet
 	if !s.VotedFor {
 		s.VotedFor = true
-		return CreateVoteResponse(voteRequest.Id, s.CurrentTerm, s.Pid, true)
+		return CreateVoteResponse(voteRequest.Id, s.CurrentTerm(), s.Pid, true)
 	}
 
-	return CreateVoteResponse(voteRequest.Id, s.CurrentTerm, s.Pid, false)
+	return CreateVoteResponse(voteRequest.Id, s.CurrentTerm(), s.Pid, false)
 }
 
 
@@ -100,14 +162,14 @@ func (s *Server) RespondToRequestVote(voteRequest RaftMessage) RaftMessage {
 */
 func (s *Server) RespondToAppendEntry(appendEntryRequest RaftMessage) RaftMessage {
 	// if stale term, reject it
-	if s.CurrentTerm > appendEntryRequest.Term {
-		util.P_out("stale term: %d > %d", s.CurrentTerm, appendEntryRequest.Term)
-		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, log.CommitIndex(), false)
+	if s.CurrentTerm() > appendEntryRequest.Term {
+		util.P_out("stale term: %d > %d", s.CurrentTerm(), appendEntryRequest.Term)
+		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), false)
 	}
 
 	// if term is newer than ours, update our term and demote self to follower
-	if appendEntryRequest.Term > s.CurrentTerm {
-		s.CurrentTerm = appendEntryRequest.Term
+	if appendEntryRequest.Term > s.CurrentTerm() {
+		s.SetCurrentTerm(appendEntryRequest.Term)
 	}
 
 	s.Timer.Reset(s.Timeout)
@@ -120,41 +182,48 @@ func (s *Server) RespondToAppendEntry(appendEntryRequest RaftMessage) RaftMessag
 	success := log.Truncate(appendEntryRequest.PrevLogIndex, appendEntryRequest.PrevLogTerm)
 	if !success {
 		util.P_out("cannot truncate properly")
-		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, log.CommitIndex(), false)
+		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), false)
 	}
 
 	for i := 0; i < len(appendEntryRequest.Entries); i++ {
 		success = log.Append(appendEntryRequest.Entries[i])
 		if !success {
-		util.P_out("cannot append properly")
-			return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, log.CommitIndex(), false)
+			util.P_out("cannot append properly")
+			return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), false)
 		}
 	}
 
 	success = log.SetCommitIndex(appendEntryRequest.LeaderCommit)
 	if !success {
 		util.P_out("")
-		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, log.CommitIndex(), false)
+		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), false)
 	}
 
 	util.P_out("%s", log.Stats())
-	return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm, s.Pid, log.CommitIndex(), true)
+	return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), true)
 }
 
 // TODO not sure about the bool
 func (s *Server) RespondToAppendEntryResponse(appendEntryResponse RaftMessage) bool {
 	// if term is newer than ours, update our term and demote self to follower
-	if appendEntryResponse.Term > s.CurrentTerm {
-		s.CurrentTerm = appendEntryResponse.Term
+	if appendEntryResponse.Term > s.CurrentTerm() {
+		s.SetCurrentTerm(appendEntryResponse.Term)
 		s.SetState(FOLLOWER)
 		s.Timer.Reset(s.Timeout)
 		s.VotedFor = false
 		return true
 	} else {
 		if appendEntryResponse.Success {
-			s.Syncs++
+			// s.Syncs++
+			s.nodeReplyMap.Set(appendEntryResponse.FromPid, true)
 
-			if s.Syncs < s.Majority {
+			// if s.Syncs < s.Majority {
+			// 	return false
+			// }
+
+			util.P_out("nodeReplyMap:%v", *(s.nodeReplyMap))
+			if !s.IsMajority(s.nodeReplyMap) {
+				util.P_out("no majority!")
 				return false
 			}
 
@@ -166,7 +235,7 @@ func (s *Server) RespondToAppendEntryResponse(appendEntryResponse RaftMessage) b
 			sort.Ints(indices)
 			util.P_out("indices: %v", indices)
 
-			c_idx := indices[s.Majority - 1]
+			c_idx := indices[s.Config.OldConfig.Majority() - 1]	// TODO for now, take the smaller commit index just to be sure (in case it is joint consensus)
 			if c_idx > log.CommitIndex() {
 				ret := log.SetCommitIndex(c_idx)
 				util.P_out("setting commit index to: %d (%v)", c_idx, ret)
@@ -190,14 +259,16 @@ func (s *Server) Execute(value string) {
 	}
 
 	// je suis le leader
-	entry := log.Entry{s.CurrentTerm, value}
+	entry := log.Entry{s.CurrentTerm(), value}
 	// prevLogIndex := log.Top()
 	// prevLogTerm := log.TopTerm()
 	leaderCommit := log.CommitIndex()
 	log.Append(entry)
 
 	// our own
-	s.Syncs = 1
+	s.nodeReplyMap.Clear()
+	s.nodeReplyMap.Set(s.Pid, true)
+	// s.Syncs = 1
 
 	// send appendEntry messages to each replica
 	response := make(chan RaftMessage)
@@ -205,7 +276,7 @@ func (s *Server) Execute(value string) {
 		for _, r := range s.Replicas {
 			prevLogIndex := log.Top() - 1	// if replica hasn't caught up, it will fail
 			prevLogTerm := log.GetTermFor(prevLogIndex)
-			appendEntryRequest := CreateAppendEntriesMessage(s.MessageId(), s.CurrentTerm, s.Pid, prevLogIndex, prevLogTerm, []log.Entry{entry}, leaderCommit)
+			appendEntryRequest := CreateAppendEntriesMessage(s.MessageId(), s.CurrentTerm(), s.Pid, prevLogIndex, prevLogTerm, []log.Entry{entry}, leaderCommit)
 			r.SendRaftMessage(appendEntryRequest, response)
 		}
 	}()
@@ -229,14 +300,14 @@ func (s *Server) Execute(value string) {
 						// prevLogIndex := log.Top()
 						// prevLogTerm := log.TopTerm()
 						// leaderCommit := log.CommitIndex()
-						// heartbeat := CreateAppendEntriesMessage(s.MessageId(), s.CurrentTerm, s.Pid, prevLogIndex, prevLogTerm, []log.Entry{}, leaderCommit)
+						// heartbeat := CreateAppendEntriesMessage(s.MessageId(), s.CurrentTerm(), s.Pid, prevLogIndex, prevLogTerm, []log.Entry{}, leaderCommit)
 
 						// replacing above with replica specific stuff
 						prevLogIndex := r.GetMatchIndex()
 						prevLogTerm := log.GetTermFor(prevLogIndex)
 						leaderCommit := log.CommitIndex()
 						entries := log.GetEntriesAfter(prevLogIndex)
-						heartbeat := CreateAppendEntriesMessage(s.MessageId(), s.CurrentTerm, s.Pid, prevLogIndex, prevLogTerm, entries, leaderCommit)
+						heartbeat := CreateAppendEntriesMessage(s.MessageId(), s.CurrentTerm(), s.Pid, prevLogIndex, prevLogTerm, entries, leaderCommit)
 
 						r.SendRaftMessage(heartbeat, response)
 					}
@@ -254,18 +325,25 @@ func (s *Server) Execute(value string) {
 */
 func (s *Server) CandidateStart() {
 	s.Timer.Reset(s.Timeout)
-	s.CurrentTerm++
+
+	// increment term
+	cur := s.CurrentTerm()
+	s.SetCurrentTerm(cur + 1)
+
 	response := make(chan RaftMessage)
 	go func() {
 		for _, r := range s.Replicas {
 			util.P_out("sending vote request to %v", r.HostAddress)
-			voteRequest := CreateVoteRequestMessage(s.MessageId(), s.CurrentTerm, s.Pid, 0, 0)	//TODO
+			voteRequest := CreateVoteRequestMessage(s.MessageId(), s.CurrentTerm(), s.Pid, log.Top(), log.TopTerm())	//TODO
+			util.P_out("voteReq:%v", voteRequest)
 			r.SendRaftMessage(voteRequest, response)
 		}
 	}()
 
+	s.nodeReplyMap.Clear()
 	s.VotedFor = true	// i voted for myself
-	numVotes := 1
+	s.nodeReplyMap.Set(s.Pid, true)
+	// numVotes := 1
 	for s.State() == CANDIDATE {
 		select {
 			case msg := <-response: {
@@ -273,18 +351,25 @@ func (s *Server) CandidateStart() {
 				switch msg.Type {
 					case VOTE_RES: {
 						if msg.VoteGranted {
-							numVotes++
-							util.P_out("got vote! numVotes is now: %d", numVotes)
+							s.nodeReplyMap.Set(msg.FromPid, true)
+							util.P_out("got vote! numVotes is now: %v", *s.nodeReplyMap)
 
-							if numVotes >= s.Majority {
+							if s.IsMajority(s.nodeReplyMap) {
 								util.P_out("Yahoo!")
 								s.SetState(LEADER)
+								s.nodeReplyMap.Clear()
 								return
 							}
+							// if numVotes >= s.Majority {
+							// 	util.P_out("Yahoo!")
+							// 	s.SetState(LEADER)
+							// 	return
+							// }
 						} else {
-							if s.CurrentTerm < msg.Term {
+							if s.CurrentTerm() < msg.Term {
 								s.SetState(FOLLOWER)
-								s.CurrentTerm = msg.Term
+								s.SetCurrentTerm(msg.Term)
+								s.nodeReplyMap.Clear()
 								break
 							}
 						}
@@ -318,8 +403,27 @@ func (s *Server) LeaderStart() {
 	response := make(chan RaftMessage)
 	for s.State() == LEADER {
 		select {
+			case msg := <-s.ConfigChangeNotifier: {
+				util.P_out("RECEIVED %v: Moving into joint consensus!;;;;;;;;;;;;;;;;;;;;;;;;;", msg)
+				go func() {
+					s.Config.SetState(C_OLD_NEW)
+					util.P_out("configuration state is %s", s.Config.State())
+					s.Execute(s.Config.GetOldNewConfigAsString())
+					s.Config.SetState(C_NEW)
+					s.Execute(s.Config.GetNewConfigAsString())
+					// the dance is over: the new state is now the old state TODO
+					s.Config.ConsensusComplete()
+				}()
+			}
 			case msg := <-response: {
 				util.P_out("on response, received: %v", msg)
+				if msg.Term > s.CurrentTerm() {
+					s.SetCurrentTerm(msg.Term)
+					s.SetState(FOLLOWER)
+					s.Timer.Reset(s.Timeout)
+					s.VotedFor = false
+					return
+				}
 			}
 			case <-s.Timer.TimeoutEvent: {
 				util.P_out("heartbeat!")
@@ -333,7 +437,7 @@ func (s *Server) LeaderStart() {
 						prevLogTerm := log.GetTermFor(prevLogIndex)
 						leaderCommit := log.CommitIndex()
 						entries := log.GetEntriesAfter(prevLogIndex)
-						heartbeat := CreateAppendEntriesMessage(s.MessageId(), s.CurrentTerm, s.Pid, prevLogIndex, prevLogTerm, entries, leaderCommit)
+						heartbeat := CreateAppendEntriesMessage(s.MessageId(), s.CurrentTerm(), s.Pid, prevLogIndex, prevLogTerm, entries, leaderCommit)
 						r.SendRaftMessage(heartbeat, response)
 					}
 				}()
@@ -407,7 +511,7 @@ func (s *Server) FollowerStart() {
 /*
 *	Control functions
 */
-func (s *Server) Init(Name string, Pid int, HostAddress util.Endpoint, ElectionTimeout int, endpoints []util.Endpoint, interf chan string, ack chan bool) {
+func (s *Server) Init(Name string, Pid int, HostAddress util.Endpoint, ElectionTimeout int, nmap *NodeMap, interf chan string, ack chan bool, configChangeNotify chan RaftMessage) {
 	s.Name = Name
 	s.Pid = Pid
 	s.HostAddress = HostAddress
@@ -427,10 +531,20 @@ func (s *Server) Init(Name string, Pid int, HostAddress util.Endpoint, ElectionT
 	storage.Init("/tmp/raftdb/" + Name)
 	log.Init(Name)
 
-	for _, e := range endpoints {
+	s.nodeReplyMap = &BoolMap{}
+
+	s.ConfigChangeNotifier = configChangeNotify
+	s.Config = &Configuration{}
+	s.Config.Init()
+
+	s.Config.OldConfig.AddNode(s.Pid, s.HostAddress)	// add myself (since endpoints, pids probably contains only the other peers)
+	for _, pid := range nmap.GetKeys() {
+		e := nmap.GetNode(pid)
 		s.Replicas = append(s.Replicas, CreateReplica(e))
+		s.Config.OldConfig.AddNode(pid, e)
 	}
-	s.Majority = len(endpoints) / 2 + 1
+	util.P_out("%v", s.Config.OldConfig)
+
 }
 
 func (s *Server) Start() {
