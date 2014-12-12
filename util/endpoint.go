@@ -18,3 +18,11 @@ func (e Endpoint) Tcpformat() string {
 func (e Endpoint) RepTcpFormat() string {
 	return fmt.Sprintf("tcp://%s:%d", e.Ipaddr, e.Port + 1)
 }
+
+func (e Endpoint) RaftTcpFormat() string {
+	return fmt.Sprintf("tcp://%s:%d", e.Ipaddr, e.Port + 6)
+}
+
+func (e Endpoint) ClientTcpFormat() string {
+	return fmt.Sprintf("tcp://%s:%d", e.Ipaddr, e.Port + 7)
+}

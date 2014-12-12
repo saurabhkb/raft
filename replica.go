@@ -50,7 +50,7 @@ func (r *Replica) SendRaftMessage(req RaftMessage, replyChan chan RaftMessage) {
 
 func (r *Replica) ApplyUpdates(req, res RaftMessage) {
 	switch req.Type {
-		case APPENDENTRIES_REQ: {
+		case RAFT_APPEND_REQ: {
 			if res.Success {
 				if len(req.Entries) > 0 {
 					// this is not a heartbeat

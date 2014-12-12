@@ -7,19 +7,20 @@ import (
 )
 
 const (
-	APPENDENTRIES_REQ = "APPENDENTRIES_REQ"
-	APPENDENTRIES_RES = "APPENDENTRIES_RES"
-
-	VOTE_REQ = "VOTE_REQ"
-	VOTE_RES = "VOTE_RES"
-
-	CLIENT_SIZE_REQ = "CLIENT_SIZE_REQ"
-	CLIENT_SIZE_RES = "CLIENT_SIZE_RES"
+	_ = iota
+	RAFT_APPEND_REQ
+	RAFT_APPEND_REP
+	RAFT_VOTE_REQ
+	RAFT_VOTE_REP
+	RAFT_CLIENT_SIZE_REQ
+	RAFT_CLIENT_SIZE_REPLY
+	RAFT_CLIENT_VALUE_REQ
+	RAFT_CLIENT_VALUE_REPLY
 )
 
 type RaftMessage struct {
 	Id string
-	Type string
+	Type int
 
 	Term int
 	FromPid int
@@ -41,28 +42,42 @@ type RaftMessage struct {
 	Size int
 	Nodes NodeMap
 
+	// for the client
+	Ivalue int
 }
 
 func (r RaftMessage) String() string {
 	switch r.Type {
-		case APPENDENTRIES_REQ: {
-			s := fmt.Sprintf("APPENDENTRIES_REQ (%s): Term:%d, FromPid:%d, prevLogIndex:%d, prevLogTerm:%d, leaderCommit:%d, entries:%v", r.Id, r.Term, r.FromPid, r.PrevLogIndex, r.PrevLogTerm, r.LeaderCommit, r.Entries)
+		case RAFT_APPEND_REQ: {
+			s := fmt.Sprintf("RAFT_APPEND_REQ (%s): Term:%d, FromPid:%d, prevLogIndex:%d, prevLogTerm:%d, leaderCommit:%d, entries:%v", r.Id, r.Term, r.FromPid, r.PrevLogIndex, r.PrevLogTerm, r.LeaderCommit, r.Entries)
 			return s
 		}
-		case APPENDENTRIES_RES: {
-			s := fmt.Sprintf("APPENDENTRIES_RES (%s): Term:%d, FromPid:%d, Success:%v", r.Id, r.Term, r.FromPid, r.Success)
+		case RAFT_APPEND_REP: {
+			s := fmt.Sprintf("RAFT_APPEND_REP (%s): Term:%d, FromPid:%d, Success:%v", r.Id, r.Term, r.FromPid, r.Success)
 			return s
 		}
-		case VOTE_REQ: {
-			s := fmt.Sprintf("VOTE_REQ (%s): Term:%d, FromPid:%d, LastLogIndex:%d, LastLogTerm:%d", r.Id, r.Term, r.FromPid, r.LastLogIndex, r.LastLogTerm)
+		case RAFT_VOTE_REQ: {
+			s := fmt.Sprintf("RAFT_VOTE_REQ (%s): Term:%d, FromPid:%d, LastLogIndex:%d, LastLogTerm:%d", r.Id, r.Term, r.FromPid, r.LastLogIndex, r.LastLogTerm)
 			return s
 		}
-		case VOTE_RES: {
-			s := fmt.Sprintf("VOTE_RES (%s): Term:%d, FromPid:%d, VoteGranted:%v", r.Id, r.Term, r.FromPid, r.VoteGranted)
+		case RAFT_VOTE_REP: {
+			s := fmt.Sprintf("RAFT_VOTE_REP (%s): Term:%d, FromPid:%d, VoteGranted:%v", r.Id, r.Term, r.FromPid, r.VoteGranted)
 			return s
 		}
-		case CLIENT_SIZE_REQ: {
-			s := fmt.Sprintf("CLIENT_SIZE_REQ: ToSize:%d, Nodes:%v", r.Size, r.Nodes)
+		case RAFT_CLIENT_SIZE_REQ: {
+			s := fmt.Sprintf("RAFT_CLIENT_SIZE_REQ: ToSize:%d, Nodes:%v", r.Size, r.Nodes)
+			return s
+		}
+		case RAFT_CLIENT_SIZE_REPLY: {
+			s := fmt.Sprintf("RAFT_CLIENT_SIZE_REPLY: ToSize:%d, Nodes:%v", r.Size, r.Nodes)
+			return s
+		}
+		case RAFT_CLIENT_VALUE_REQ: {
+			s := fmt.Sprintf("RAFT_CLIENT_VALUE_REQ: Ivalue:%d, Success:%v", r.Ivalue, r.Success)
+			return s
+		}
+		case RAFT_CLIENT_VALUE_REPLY: {
+			s := fmt.Sprintf("RAFT_CLIENT_VALUE_REPLY: Ivalue:%d, Sucess:%v", r.Ivalue, r.Success)
 			return s
 		}
 		default: {
@@ -86,7 +101,7 @@ func FromJson(s string) RaftMessage {
 func CreateAppendEntriesMessage(id string, term int, pid int, prevLogIndex int, prevLogTerm int, entries []log.Entry, leaderCommit int) RaftMessage {
 	message := RaftMessage{}
 	message.Id = id
-	message.Type = APPENDENTRIES_REQ
+	message.Type = RAFT_APPEND_REQ
 	message.Term = term
 	message.FromPid = pid
 	message.PrevLogIndex = prevLogIndex
@@ -99,7 +114,7 @@ func CreateAppendEntriesMessage(id string, term int, pid int, prevLogIndex int, 
 func CreateAppendEntriesResponse(id string, term int, pid int, commitIndex int, success bool) RaftMessage {
 	m := RaftMessage{}
 	m.Id = id
-	m.Type = APPENDENTRIES_RES
+	m.Type = RAFT_APPEND_REP
 	m.Term = term
 	m.FromPid = pid
 	m.Success = success
@@ -110,7 +125,7 @@ func CreateAppendEntriesResponse(id string, term int, pid int, commitIndex int, 
 func CreateVoteRequestMessage(id string, term, pid, lastLogIndex, lastLogTerm int) RaftMessage {
 	m := RaftMessage{}
 	m.Id = id
-	m.Type = VOTE_REQ
+	m.Type = RAFT_VOTE_REQ
 	m.Term = term
 	m.FromPid = pid
 	m.LastLogIndex = lastLogIndex
@@ -122,7 +137,7 @@ func CreateVoteRequestMessage(id string, term, pid, lastLogIndex, lastLogTerm in
 func CreateVoteResponse(id string, term int, pid int, voteGranted bool) RaftMessage {
 	m := RaftMessage{}
 	m.Id = id
-	m.Type = VOTE_RES
+	m.Type = RAFT_VOTE_REP
 	m.Term = term
 	m.FromPid = pid
 	m.VoteGranted = voteGranted
@@ -132,9 +147,34 @@ func CreateVoteResponse(id string, term int, pid int, voteGranted bool) RaftMess
 func CreateClientSizeRequestMessage(id string, size int, nodeMap NodeMap) RaftMessage {
 	m := RaftMessage{}
 	m.Id = id
-	m.Type = CLIENT_SIZE_REQ
+	m.Type = RAFT_CLIENT_SIZE_REQ
 	m.Size = size
 	m.Nodes = nodeMap
+	return m
+}
+
+func CreateClientSizeResponse(id string, success bool) RaftMessage {
+	m := RaftMessage{}
+	m.Id = id
+	m.Type = RAFT_CLIENT_SIZE_REPLY
+	m.Success = success
+	return m
+}
+
+func CreateClientValueResponse(id string, success bool) RaftMessage {
+	m := RaftMessage{}
+	m.Id = id
+	m.Type = RAFT_CLIENT_VALUE_REPLY
+	m.Success = success
+	return m
+}
+
+func CreateDiffLeaderResponse(id string, leaderPid int) RaftMessage {
+	m := RaftMessage{}
+	m.Id = id
+	m.Type = RAFT_CLIENT_VALUE_REPLY
+	m.Success = false
+	m.Ivalue = leaderPid
 	return m
 }
 

@@ -37,7 +37,7 @@ type Server struct {
 	Sresponder *Responder
 
 	ClientInterface chan string
-	ClientAck chan bool
+	ClientAck chan RaftMessage
 
 	nodeReplyMap *BoolMap
 
@@ -130,6 +130,13 @@ func (s *Server) SetCurrentTerm(trm int) {
 */
 // can vote if I haven't voted before and the message term is >= mine
 func (s *Server) RespondToRequestVote(voteRequest RaftMessage) RaftMessage {
+	// if the candidate's last log index is not at least as up to date as our own, rejecr
+	// this was initially after the term checks
+	if log.Top() > voteRequest.LastLogIndex || log.TopTerm() > voteRequest.LastLogTerm {
+		util.P_out("!!!!!!!!!!! CANT VOTE FOR YOU! You aren't as recent as me!: %v", util.GetEndpointFromPid(voteRequest.FromPid))
+		return CreateVoteResponse(voteRequest.Id, s.CurrentTerm(), s.Pid, false)
+	}
+
 	// if stale term, reject it
 	if s.CurrentTerm() > voteRequest.Term {
 		return CreateVoteResponse(voteRequest.Id, s.CurrentTerm(), s.Pid, false)
@@ -141,11 +148,6 @@ func (s *Server) RespondToRequestVote(voteRequest RaftMessage) RaftMessage {
 		s.SetCurrentTerm(voteRequest.Term)
 	}
 
-	// if the candidate's last log index is not at least as up to date as our own, reject
-	if log.Top() > voteRequest.LastLogIndex || log.TopTerm() > voteRequest.LastLogTerm {
-		util.P_out("!!!!!!!!!!! CANT VOTE FOR YOU! You aren't as recent as me!: %v", util.GetEndpointFromPid(voteRequest.FromPid))
-		return CreateVoteResponse(voteRequest.Id, s.CurrentTerm(), s.Pid, false)
-	}
 
 	// if i haven't voted yet
 	if !s.VotedFor {
@@ -252,18 +254,29 @@ func (s *Server) RespondToAppendEntryResponse(appendEntryResponse RaftMessage) b
 /*
 * Client Interface
 */
+func (s *Server) ExecuteClient(value string) RaftMessage {
+	entry := log.CreateValueEntry(s.CurrentTerm(), value)
+	return s.execute(entry)
+}
+func (s *Server) ExecuteSize(size int) RaftMessage {
+	entry := log.CreateSizeEntry(s.CurrentTerm(), size)
+	return s.execute(entry)
+}
 // will try to append the value to the log and commit
-func (s *Server) Execute(value string) {
+// TODO => probably need a separate nodeReplyMap, etc. for joint consensus since it needs to take place in parallel with normal client commits
+func (s *Server) execute(entry log.Entry) RaftMessage {
 	if s.State() != LEADER {
-		return
+		return CreateClientSizeResponse(s.MessageId(), false)
 	}
 
 	// je suis le leader
-	entry := log.Entry{s.CurrentTerm(), value}
+	// entry := log.Entry{s.CurrentTerm(), value}
 	// prevLogIndex := log.Top()
 	// prevLogTerm := log.TopTerm()
 	leaderCommit := log.CommitIndex()
-	log.Append(entry)
+	util.P_out("Trying to append entry: %v", log.Append(entry))
+
+	util.P_out("%v", log.Stats())
 
 	// our own
 	s.nodeReplyMap.Clear()
@@ -287,7 +300,7 @@ func (s *Server) Execute(value string) {
 				util.P_out("%v", msg)
 				if s.RespondToAppendEntryResponse(msg) {
 					util.P_out("BREAKING>>>>>>>>>>>>>>>>>>>>>>>>>")
-					return
+					return CreateClientValueResponse(s.MessageId(), true)
 				}
 			}
 			case <-s.Timer.TimeoutEvent: {
@@ -317,7 +330,9 @@ func (s *Server) Execute(value string) {
 			}
 		}
 	}
+	// probably shouldn't come here
 	util.P_out(">>>>>>>>>>>> RETURNING")
+	return CreateClientValueResponse(s.MessageId(), false)
 }
 
 /*
@@ -349,7 +364,7 @@ func (s *Server) CandidateStart() {
 			case msg := <-response: {
 				util.P_out("initiate election: %v", msg)
 				switch msg.Type {
-					case VOTE_RES: {
+					case RAFT_VOTE_REP: {
 						if msg.VoteGranted {
 							s.nodeReplyMap.Set(msg.FromPid, true)
 							util.P_out("got vote! numVotes is now: %v", *s.nodeReplyMap)
@@ -383,7 +398,7 @@ func (s *Server) CandidateStart() {
 			}
 			case msg := <-s.ClientInterface: {
 				util.P_out("Not the leader, returning... %s", msg)
-				s.ClientAck <- false
+				s.ClientAck <- CreateDiffLeaderResponse(s.MessageId(), -1)
 			}
 		}
 		// was initially here but break simply breaks out of the switch, not the for
@@ -406,11 +421,32 @@ func (s *Server) LeaderStart() {
 			case msg := <-s.ConfigChangeNotifier: {
 				util.P_out("RECEIVED %v: Moving into joint consensus!;;;;;;;;;;;;;;;;;;;;;;;;;", msg)
 				go func() {
+					// re-read config file to get new endpoints
+					// TODO update Replicas <- really need a lock on the replicas! (both the old + new)
+					util.SetConfigFile("config.txt")
+					endpoints := util.ReadAllEndpoints(msg.Size)
+					s.Replicas = []*Replica{}
+					for _, e := range endpoints {
+						if e == s.HostAddress {
+							continue
+						} else {
+							s.Replicas = append(s.Replicas, CreateReplica(e))
+							s.Config.NewConfig.AddNode(util.GetPidFromEndpoint(e), e)
+						}
+					}
+					util.P_out("NEW REPLICAS: %v", s.Replicas)
+
 					s.Config.SetState(C_OLD_NEW)
 					util.P_out("configuration state is %s", s.Config.State())
-					s.Execute(s.Config.GetOldNewConfigAsString())
+
+					s.ExecuteSize(len(s.Config.OldConfig))
 					s.Config.SetState(C_NEW)
-					s.Execute(s.Config.GetNewConfigAsString())
+					s.ExecuteSize(len(s.Config.NewConfig))
+					// TODO update Replicas -> only the new ones now
+					s.Replicas = []*Replica{}
+					for _, e := range s.Config.GetNewEndpoints() {
+						s.Replicas = append(s.Replicas, CreateReplica(e))
+					}
 					// the dance is over: the new state is now the old state TODO
 					s.Config.ConsensusComplete()
 				}()
@@ -448,18 +484,18 @@ func (s *Server) LeaderStart() {
 				util.P_out("received raft message!: %v", msg)
 				var reply RaftMessage
 				switch msg.Type {
-					case APPENDENTRIES_REQ: {
+					case RAFT_APPEND_REQ: {
 						s.Timer.Reset(s.Timeout)
 						reply = s.RespondToAppendEntry(msg)
 					}
-					case APPENDENTRIES_RES: {
+					case RAFT_APPEND_REP: {
 						util.P_out("received appendEntry response!: %v", msg)
 					}
-					case VOTE_REQ: {
+					case RAFT_VOTE_REQ: {
 						s.Timer.Reset(s.Timeout)
 						reply = s.RespondToRequestVote(msg)
 					}
-					case VOTE_RES: {
+					case RAFT_VOTE_REP: {
 						util.P_out("received vote response!: %v", msg)
 					}
 				}
@@ -467,9 +503,9 @@ func (s *Server) LeaderStart() {
 			}
 			case val := <-s.ClientInterface: {
 				util.P_out("I am the leader, going to do something... %s", val)
-				s.Execute(val)
+				response := s.ExecuteClient(val)
 				util.P_out("done executing ====================================")
-				s.ClientAck <- true
+				s.ClientAck <- response
 			}
 		}
 	}
@@ -489,11 +525,11 @@ func (s *Server) FollowerStart() {
 				util.P_out("received raft message!: %v", msg)
 				var reply RaftMessage
 				switch msg.Type {
-					case APPENDENTRIES_REQ: {
+					case RAFT_APPEND_REQ: {
 						s.Timer.Reset(s.Timeout)
 						reply = s.RespondToAppendEntry(msg)
 					}
-					case VOTE_REQ: {
+					case RAFT_VOTE_REQ: {
 						s.Timer.Reset(s.Timeout)
 						reply = s.RespondToRequestVote(msg)
 					}
@@ -502,7 +538,8 @@ func (s *Server) FollowerStart() {
 			}
 			case msg := <-s.ClientInterface: {
 				util.P_out("Not the leader, returning... %s", msg)
-				s.ClientAck <- false
+				// s.ClientAck <- false
+				s.ClientAck <- CreateDiffLeaderResponse(s.MessageId(), -1)
 			}
 		}
 	}
@@ -511,7 +548,7 @@ func (s *Server) FollowerStart() {
 /*
 *	Control functions
 */
-func (s *Server) Init(Name string, Pid int, HostAddress util.Endpoint, ElectionTimeout int, nmap *NodeMap, interf chan string, ack chan bool, configChangeNotify chan RaftMessage) {
+func (s *Server) Init(Name string, Pid int, HostAddress util.Endpoint, ElectionTimeout int, nmap *NodeMap, interf chan string, ack chan RaftMessage, configChangeNotify chan RaftMessage) {
 	s.Name = Name
 	s.Pid = Pid
 	s.HostAddress = HostAddress

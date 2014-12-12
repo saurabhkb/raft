@@ -6,7 +6,41 @@ import (
 	"math/rand"
 	"time"
 	"fmt"
+	"strconv"
+	zmq "github.com/pebbe/zmq4"
 )
+
+func ClientLoop(HostAddress util.Endpoint, configChangeNotify chan RaftMessage, serverConnector chan string, serverAck chan bool) {
+	clientSocket, _ := zmq.NewSocket(zmq.REP)
+	clientSocket.Bind(HostAddress.ClientTcpFormat())
+	for {
+		msg, _ := clientSocket.Recv(0)
+		clientMsg := FromJson(msg)
+
+		switch clientMsg.Type {
+			case RAFT_CLIENT_SIZE_REQ: {
+				n := clientMsg.Size
+				util.SetConfigFile("config.txt")
+
+				EndpointList := util.ReadAllEndpoints(n)
+				nmap := &NodeMap{}
+				for _, e := range EndpointList {
+					if e == HostAddress {
+						continue
+					}
+					nmap.AddNode(util.GetPidFromEndpoint(e), e)
+				}
+				configChangeNotify <- CreateClientSizeRequestMessage("configChange", n, *nmap)
+				<-serverAck
+			}
+			case RAFT_CLIENT_VALUE_REQ: {
+				str := strconv.Itoa(clientMsg.Ivalue)
+				serverConnector <- str
+				<-serverAck
+			}
+		}
+	}
+}
 
 
 const MIN_ELECTION_TIMEOUT = 4
@@ -37,7 +71,7 @@ func main() {
 
 	configChangeNotify := make(chan RaftMessage)
 	serverConnector := make(chan string)
-	serverAck := make(chan bool)
+	serverAck := make(chan RaftMessage)
 
 	go func() {
 		s := Server{}
@@ -68,7 +102,8 @@ func main() {
 
 		} else {
 			serverConnector <- s
-			<-serverAck
+			ret := <-serverAck
+			util.P_out("RET:%v", ret)
 		}
 	}
 }
