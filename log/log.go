@@ -24,7 +24,7 @@ var lock *sync.Mutex
 
 func Init(name string) {
 	Name = name
-	dummy = Entry{-1, "DUMMY"}
+	dummy = CreateValueEntry(0, "dummy")
 	VolatileLog = []Entry{dummy}
 	lock = &sync.Mutex{}
 
@@ -43,6 +43,7 @@ func Init(name string) {
 }
 
 func Append(entry Entry) bool {
+	util.P_out("======+> APPENDING ENTRY: %v", entry)
 	lock.Lock()
 	defer lock.Unlock()
 	volatileLogSize := len(VolatileLog)

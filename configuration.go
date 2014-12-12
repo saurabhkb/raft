@@ -4,6 +4,7 @@ import (
 	"sync"
 	"fmt"
 	"strconv"
+	"raft/util"
 )
 
 const (
@@ -55,6 +56,25 @@ func (c *Configuration) GetNewConfigPids() []int {
 	for k := range c.NewConfig {
 		intk, _ := strconv.Atoi(k)
 		l = append(l, intk)
+	}
+	return l
+}
+
+func (c *Configuration) GetUnionEndpoints() []util.Endpoint {
+	l := []util.Endpoint{}
+	for k := range c.OldConfig {
+		l = append(l, c.NewConfig[k])
+	}
+	for k := range c.NewConfig {
+		l = append(l, c.NewConfig[k])
+	}
+	return l
+}
+
+func (c *Configuration) GetNewEndpoints() []util.Endpoint {
+	l := []util.Endpoint{}
+	for k := range c.NewConfig {
+		l = append(l, c.NewConfig[k])
 	}
 	return l
 }

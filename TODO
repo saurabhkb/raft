@@ -3,3 +3,10 @@ ive now made it so that commitIndex is initialized to the size of the loaded log
 
 when a new server becomes the leader, it needs to set the next index for eahc replica to something
 should the append entries response include the commit index of the follower?
+
+I am placing the last log index, last log term check before the term comparison since when a new follower comes up, even if he has a higher term number, since his log isn't as complete as ours, reject him and stay the leader (if you are one).
+
+Had forgotten to update server's replica list once new configuration thing was set. Am doing it now.
+Only thing is I need to figure out how the other servers find out about the new configuration (oh, through the size request message)
+once a node gets that type of message, it needs to re-read the config-file and update its stuff accordingly
+So I can't just send OLD_SIZE, I need to send NEW_SIZE too
