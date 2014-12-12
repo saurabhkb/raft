@@ -16,6 +16,13 @@ import (
 	"sync"
 )
 
+const (
+	ERROR_IDX_LT_COMMIT = "ERROR_IDX_LT_COMMIT"
+	ERROR_IDX_GT_COMMIT = "ERROR_IDX_GT_COMMIT"
+	ERROR_MISMATCHED_TERMS = "ERROR_MISMATCHED_TERMS"
+	TRUNCATE_SUCCESS = "TRUNCATE_SUCCESS"
+)
+
 var Name string
 var commitIndex int
 var VolatileLog []Entry
@@ -124,17 +131,54 @@ func Saved() []Entry {
 /*
 * log = log[:idx] (if log[idx] isn't committed)
 */
-func Truncate(idx, term int) bool {
+// func Truncate(idx, term int) bool {
+// 	lock.Lock()
+// 	defer lock.Unlock()
+// 	util.P_out("before truncate: %v", VolatileLog)
+// 	/*
+// 	* changing this. if idx < commitIndex, let's assume that this server received a duplicate message and is being asked to commit
+// 	* stuff that it has already committed before => return true. BUT also, we need to notify the called (create append entries response) that 
+// 	* the stuff should NOT be appended.
+// 	* however, if idx > len(VolatileLog) - 1, that means this server still needs to catch up (with the leader decrementing its nextindex
+// 	* for this server => return false
+// 	*/
+// 	// if idx < commitIndex || idx > len(VolatileLog) - 1 {	// can't use Top (it deadlocks)
+// 	// 	return false
+// 	// }
+// 	if idx < commitIndex {
+// 		return true
+// 	}
+// 	if idx > len(VolatileLog) - 1 {
+// 		return false
+// 	}
+// 
+// 	if idx > 0 {
+// 		if VolatileLog[idx].Term != term {
+// 			return false
+// 		} else {
+// 			VolatileLog = VolatileLog[:idx + 1]	// include idx in the thing to be kept
+// 		}
+// 	} else {
+// 		VolatileLog = []Entry{dummy}
+// 	}
+// 	util.P_out("after truncate: %v", VolatileLog)
+// 	return true
+// }
+
+func Truncate(idx, term int) string {
 	lock.Lock()
 	defer lock.Unlock()
 	util.P_out("before truncate: %v", VolatileLog)
-	if idx < commitIndex || idx > len(VolatileLog) - 1 {	// can't use Top (it deadlocks)
-		return false
+	if idx < commitIndex {
+		return ERROR_IDX_LT_COMMIT
+	}
+	if idx > len(VolatileLog) - 1 {
+		return ERROR_IDX_GT_COMMIT
 	}
 
 	if idx > 0 {
 		if VolatileLog[idx].Term != term {
-			return false
+			return ERROR_MISMATCHED_TERMS
 		} else {
 			VolatileLog = VolatileLog[:idx + 1]	// include idx in the thing to be kept
 		}
@@ -142,7 +186,7 @@ func Truncate(idx, term int) bool {
 		VolatileLog = []Entry{dummy}
 	}
 	util.P_out("after truncate: %v", VolatileLog)
-	return true
+	return TRUNCATE_SUCCESS
 }
 
 func GetTermFor(idx int) int {

@@ -181,21 +181,38 @@ func (s *Server) RespondToAppendEntry(appendEntryRequest RaftMessage) RaftMessag
 	// reset timer
 	s.Timer.Reset(s.Timeout)
 
-	success := log.Truncate(appendEntryRequest.PrevLogIndex, appendEntryRequest.PrevLogTerm)
-	if !success {
-		util.P_out("cannot truncate properly")
-		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), false)
+	status_code := log.Truncate(appendEntryRequest.PrevLogIndex, appendEntryRequest.PrevLogTerm)
+	switch status_code {
+		case log.ERROR_IDX_LT_COMMIT: {
+			util.P_out(log.ERROR_IDX_LT_COMMIT)
+			return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), true)
+		}
+		case log.ERROR_IDX_GT_COMMIT: {
+			util.P_out(log.ERROR_IDX_GT_COMMIT)
+			return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), false)
+		}
+		case log.ERROR_MISMATCHED_TERMS: {
+			util.P_out(log.ERROR_MISMATCHED_TERMS)
+			return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), false)
+		}
+		default: {
+			util.P_out("pass!")
+		}
 	}
+	// if !success {
+	// 	util.P_out("cannot truncate properly")
+	// 	return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), false)
+	// }
 
 	for i := 0; i < len(appendEntryRequest.Entries); i++ {
-		success = log.Append(appendEntryRequest.Entries[i])
+		success := log.Append(appendEntryRequest.Entries[i])
 		if !success {
 			util.P_out("cannot append properly")
 			return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), false)
 		}
 	}
 
-	success = log.SetCommitIndex(appendEntryRequest.LeaderCommit)
+	success := log.SetCommitIndex(appendEntryRequest.LeaderCommit)
 	if !success {
 		util.P_out("")
 		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), false)
@@ -258,8 +275,8 @@ func (s *Server) ExecuteClient(value string) RaftMessage {
 	entry := log.CreateValueEntry(s.CurrentTerm(), value)
 	return s.execute(entry)
 }
-func (s *Server) ExecuteSize(size int) RaftMessage {
-	entry := log.CreateSizeEntry(s.CurrentTerm(), size)
+func (s *Server) ExecuteSize(size, vtype int) RaftMessage {
+	entry := log.CreateSizeEntry(s.CurrentTerm(), size, vtype)
 	return s.execute(entry)
 }
 // will try to append the value to the log and commit
@@ -411,6 +428,31 @@ func (s *Server) CandidateStart() {
 }
 
 
+func (s *Server) MoveIntoJointConsensus(newSize int) {
+	util.SetConfigFile("config.txt")
+	endpoints := util.ReadAllEndpoints(newSize)
+	s.Replicas = []*Replica{}
+	for _, e := range endpoints {
+		if e == s.HostAddress {
+			continue
+		} else {
+			s.Replicas = append(s.Replicas, CreateReplica(e))
+			s.Config.NewConfig.AddNode(util.GetPidFromEndpoint(e), e)
+		}
+	}
+	s.Config.SetState(C_OLD_NEW)
+}
+
+func (s *Server) MoveIntoNewConfiguration() {
+	// once it commits, set state as NEW
+	s.Config.SetState(C_NEW)
+
+	// update Replicas -> only the new ones now
+	s.Replicas = []*Replica{}
+	for _, e := range s.Config.GetNewEndpoints() {
+		s.Replicas = append(s.Replicas, CreateReplica(e))
+	}
+}
 
 func (s *Server) LeaderStart() {
 	// send a heartbeat TODO
@@ -423,30 +465,42 @@ func (s *Server) LeaderStart() {
 				go func() {
 					// re-read config file to get new endpoints
 					// TODO update Replicas <- really need a lock on the replicas! (both the old + new)
-					util.SetConfigFile("config.txt")
-					endpoints := util.ReadAllEndpoints(msg.Size)
-					s.Replicas = []*Replica{}
-					for _, e := range endpoints {
-						if e == s.HostAddress {
-							continue
-						} else {
-							s.Replicas = append(s.Replicas, CreateReplica(e))
-							s.Config.NewConfig.AddNode(util.GetPidFromEndpoint(e), e)
-						}
-					}
-					util.P_out("NEW REPLICAS: %v", s.Replicas)
+					// util.SetConfigFile("config.txt")
+					// endpoints := util.ReadAllEndpoints(msg.Size)
+					// s.Replicas = []*Replica{}
+					// for _, e := range endpoints {
+					// 	if e == s.HostAddress {
+					// 		continue
+					// 	} else {
+					// 		s.Replicas = append(s.Replicas, CreateReplica(e))
+					// 		s.Config.NewConfig.AddNode(util.GetPidFromEndpoint(e), e)
+					// 	}
+					// }
+					// util.P_out("NEW REPLICAS: %v", s.Replicas)
 
-					s.Config.SetState(C_OLD_NEW)
+					// // set state as OLD_NEW
+					// s.Config.SetState(C_OLD_NEW)
+					s.MoveIntoJointConsensus(msg.Size)
 					util.P_out("configuration state is %s", s.Config.State())
 
-					s.ExecuteSize(len(s.Config.OldConfig))
-					s.Config.SetState(C_NEW)
-					s.ExecuteSize(len(s.Config.NewConfig))
-					// TODO update Replicas -> only the new ones now
-					s.Replicas = []*Replica{}
-					for _, e := range s.Config.GetNewEndpoints() {
-						s.Replicas = append(s.Replicas, CreateReplica(e))
-					}
+					// execute joint consensus message
+					s.ExecuteSize(len(s.Config.NewConfig), log.ENTRY_OLD_NEW)
+
+					// // once it commits, set state as NEW
+					// s.Config.SetState(C_NEW)
+
+					// // TODO update Replicas -> only the new ones now
+					// s.Replicas = []*Replica{}
+					// for _, e := range s.Config.GetNewEndpoints() {
+					// 	s.Replicas = append(s.Replicas, CreateReplica(e))
+					// }
+
+					// once that is committed, move into new configuration
+					s.MoveIntoNewConfiguration()
+
+					// execute new quorum message
+					s.ExecuteSize(len(s.Config.NewConfig), log.ENTRY_NEW)
+
 					// the dance is over: the new state is now the old state TODO
 					s.Config.ConsensusComplete()
 				}()
@@ -526,6 +580,27 @@ func (s *Server) FollowerStart() {
 				var reply RaftMessage
 				switch msg.Type {
 					case RAFT_APPEND_REQ: {
+						// check the entry type (if it is a SIZE request, update our Replicas) and change our state to joint consensus
+						// From the paper:
+						// "a server always uses the latest configuration in its log, regardless of whether the entry is committed"
+						// so we don't care if it commits or not, change our configuration anyway
+						for _, e := range msg.Entries {
+							if e.Vtype == log.ENTRY_OLD_NEW {
+								util.P_out("HEY! JOINT CONSENSUS!")
+								if s.Config.State() == C_OLD {
+									// move into joint consensus
+									s.MoveIntoJointConsensus(e.Size)
+									util.P_out("moved into state %v", s.Config.State())
+								}
+							} else if e.Vtype == log.ENTRY_NEW {
+								if s.Config.State() == C_OLD_NEW {
+									util.P_out("HEY! JOINT CONSENSUS => new config!")
+									s.MoveIntoNewConfiguration()
+									s.Config.ConsensusComplete()
+									util.P_out("config change complete!")
+								}
+							}
+						}
 						s.Timer.Reset(s.Timeout)
 						reply = s.RespondToAppendEntry(msg)
 					}
