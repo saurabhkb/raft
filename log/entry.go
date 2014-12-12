@@ -7,6 +7,8 @@ const (
 	ENTRY_DUMMY
 	ENTRY_SIZE
 	ENTRY_CLIENT
+	ENTRY_OLD_NEW
+	ENTRY_NEW
 )
 
 type Entry struct {
@@ -35,10 +37,11 @@ func CreateValueEntry(term int, value string) Entry {
 	return e
 }
 
-func CreateSizeEntry(term, size int) Entry {
+func CreateSizeEntry(term, size, vtype int) Entry {
 	e := Entry{}
 	e.Vtype = ENTRY_SIZE
 	e.Size = size
 	e.Term = term
+	e.Vtype = vtype
 	return e
 }

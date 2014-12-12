@@ -55,7 +55,14 @@ func (r *Replica) ApplyUpdates(req, res RaftMessage) {
 				if len(req.Entries) > 0 {
 					// this is not a heartbeat
 					r.SetMatchTerm(res.Term)
-					r.SetMatchIndex(r.MatchIndex + len(req.Entries))
+					// instead of doing this, lets set it to req.PrevLogIndex + len(req.Entries)
+					// because if we get this multiple times, bad things happen
+					//r.SetMatchIndex(r.MatchIndex + len(req.Entries))
+
+					if r.MatchIndex < req.PrevLogIndex + len(req.Entries) {
+						r.MatchIndex = req.PrevLogIndex + len(req.Entries)
+					}
+
 					r.SetNextIndex(r.MatchIndex + 1)
 					// r.MatchTerm = res.Term
 					// r.MatchIndex = r.MatchIndex + len(req.Entries)

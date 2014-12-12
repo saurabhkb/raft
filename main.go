@@ -10,7 +10,7 @@ import (
 	zmq "github.com/pebbe/zmq4"
 )
 
-func ClientLoop(HostAddress util.Endpoint, configChangeNotify chan RaftMessage, serverConnector chan string, serverAck chan bool) {
+func ClientSocketLoop(HostAddress util.Endpoint, configChangeNotify chan RaftMessage, serverConnector chan string, serverAck chan RaftMessage) {
 	clientSocket, _ := zmq.NewSocket(zmq.REP)
 	clientSocket.Bind(HostAddress.ClientTcpFormat())
 	for {
@@ -38,6 +38,35 @@ func ClientLoop(HostAddress util.Endpoint, configChangeNotify chan RaftMessage, 
 				serverConnector <- str
 				<-serverAck
 			}
+		}
+	}
+}
+
+func ClientStdinLoop(HostAddress util.Endpoint, configChangeNotify chan RaftMessage, serverConnector chan string, serverAck chan RaftMessage) {
+	for {
+		var s string
+		fmt.Printf("Input:")
+		fmt.Scanf("%s", &s)
+		util.P_out("read: %s", s)
+		if s[0] == '#' {
+			n := int(s[1] - '0')
+			fmt.Println(n)
+			util.SetConfigFile("config.txt")
+
+			EndpointList := util.ReadAllEndpoints(n)
+			nmap := &NodeMap{}
+			for _, e := range EndpointList {
+				if e == HostAddress {
+					continue
+				}
+				nmap.AddNode(util.GetPidFromEndpoint(e), e)
+			}
+			configChangeNotify <- CreateClientSizeRequestMessage("configChange", n, *nmap)
+
+		} else {
+			serverConnector <- s
+			ret := <-serverAck
+			util.P_out("RET:%v", ret)
 		}
 	}
 }
@@ -79,31 +108,6 @@ func main() {
 		s.Start()
 	}()
 
-	// ideally, read stuff from a zmq socket; take from STDIN for now...
-	for {
-		var s string
-		fmt.Printf("Input:")
-		fmt.Scanf("%s", &s)
-		util.P_out("read: %s", s)
-		if s[0] == '#' {
-			n := int(s[1] - '0')
-			fmt.Println(n)
-			util.SetConfigFile("config.txt")
-
-			EndpointList := util.ReadAllEndpoints(n)
-			nmap := &NodeMap{}
-			for _, e := range EndpointList {
-				if e == HostAddress {
-					continue
-				}
-				nmap.AddNode(util.GetPidFromEndpoint(e), e)
-			}
-			configChangeNotify <- CreateClientSizeRequestMessage("configChange", n, *nmap)
-
-		} else {
-			serverConnector <- s
-			ret := <-serverAck
-			util.P_out("RET:%v", ret)
-		}
-	}
+	ClientStdinLoop(HostAddress, configChangeNotify, serverConnector, serverAck)
+	//ClientSocketLoop(HostAddress, configChangeNotify, serverConnector, serverAck)
 }
