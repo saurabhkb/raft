@@ -24,6 +24,7 @@ type Server struct {
 
 	// raft related
 	Replicas []*Replica
+	ReplicaLock *sync.Mutex
 	currentTerm int
 
 	state string
@@ -45,6 +46,8 @@ type Server struct {
 
 	Config *Configuration
 	ConfigChangeNotifier chan RaftMessage
+
+	LeaderPid int
 }
 
 /*
@@ -174,6 +177,8 @@ func (s *Server) RespondToAppendEntry(appendEntryRequest RaftMessage) RaftMessag
 		s.SetCurrentTerm(appendEntryRequest.Term)
 	}
 
+	s.LeaderPid = appendEntryRequest.FromPid
+
 	s.Timer.Reset(s.Timeout)
 	s.SetState(FOLLOWER)
 	s.VotedFor = false
@@ -248,9 +253,11 @@ func (s *Server) RespondToAppendEntryResponse(appendEntryResponse RaftMessage) b
 
 			var indices []int
 			indices = append(indices, log.Top())
+			s.ReplicaLock.Lock()
 			for _, r := range s.Replicas {
 				indices = append(indices, r.GetMatchIndex())
 			}
+			s.ReplicaLock.Unlock()
 			sort.Ints(indices)
 			util.P_out("indices: %v", indices)
 
@@ -303,12 +310,14 @@ func (s *Server) execute(entry log.Entry) RaftMessage {
 	// send appendEntry messages to each replica
 	response := make(chan RaftMessage)
 	go func() {
+		s.ReplicaLock.Lock()
 		for _, r := range s.Replicas {
 			prevLogIndex := log.Top() - 1	// if replica hasn't caught up, it will fail
 			prevLogTerm := log.GetTermFor(prevLogIndex)
 			appendEntryRequest := CreateAppendEntriesMessage(s.MessageId(), s.CurrentTerm(), s.Pid, prevLogIndex, prevLogTerm, []log.Entry{entry}, leaderCommit)
 			r.SendRaftMessage(appendEntryRequest, response)
 		}
+		s.ReplicaLock.Unlock()
 	}()
 
 	for {
@@ -325,6 +334,7 @@ func (s *Server) execute(entry log.Entry) RaftMessage {
 				s.Timer.Reset(s.HeartbeatTimeout)
 
 				go func() {
+					s.ReplicaLock.Lock()
 					for _, r := range s.Replicas {
 						util.P_out("sending heartbeat to %v", r.HostAddress)
 						// prevLogIndex := log.Top()
@@ -341,6 +351,7 @@ func (s *Server) execute(entry log.Entry) RaftMessage {
 
 						r.SendRaftMessage(heartbeat, response)
 					}
+					s.ReplicaLock.Unlock()
 				}()
 
 				s.Timer.TimeoutAck <- true
@@ -364,12 +375,14 @@ func (s *Server) CandidateStart() {
 
 	response := make(chan RaftMessage)
 	go func() {
+		s.ReplicaLock.Lock()
 		for _, r := range s.Replicas {
 			util.P_out("sending vote request to %v", r.HostAddress)
 			voteRequest := CreateVoteRequestMessage(s.MessageId(), s.CurrentTerm(), s.Pid, log.Top(), log.TopTerm())	//TODO
 			util.P_out("voteReq:%v", voteRequest)
 			r.SendRaftMessage(voteRequest, response)
 		}
+		s.ReplicaLock.Unlock()
 	}()
 
 	s.nodeReplyMap.Clear()
@@ -415,7 +428,7 @@ func (s *Server) CandidateStart() {
 			}
 			case msg := <-s.ClientInterface: {
 				util.P_out("Not the leader, returning... %s", msg)
-				s.ClientAck <- CreateDiffLeaderResponse(s.MessageId(), -1)
+				s.ClientAck <- CreateDiffLeaderResponse(s.MessageId(), s.LeaderPid)
 			}
 		}
 		// was initially here but break simply breaks out of the switch, not the for
@@ -431,15 +444,15 @@ func (s *Server) CandidateStart() {
 func (s *Server) MoveIntoJointConsensus(newSize int) {
 	util.SetConfigFile("config.txt")
 	endpoints := util.ReadAllEndpoints(newSize)
+	s.ReplicaLock.Lock()
 	s.Replicas = []*Replica{}
 	for _, e := range endpoints {
-		if e == s.HostAddress {
-			continue
-		} else {
+		if e != s.HostAddress {
 			s.Replicas = append(s.Replicas, CreateReplica(e))
-			s.Config.NewConfig.AddNode(util.GetPidFromEndpoint(e), e)
 		}
+		s.Config.NewConfig.AddNode(util.GetPidFromEndpoint(e), e)
 	}
+	s.ReplicaLock.Unlock()
 	s.Config.SetState(C_OLD_NEW)
 }
 
@@ -448,10 +461,14 @@ func (s *Server) MoveIntoNewConfiguration() {
 	s.Config.SetState(C_NEW)
 
 	// update Replicas -> only the new ones now
+	s.ReplicaLock.Lock()
 	s.Replicas = []*Replica{}
 	for _, e := range s.Config.GetNewEndpoints() {
-		s.Replicas = append(s.Replicas, CreateReplica(e))
+		if e != s.HostAddress {
+			s.Replicas = append(s.Replicas, CreateReplica(e))
+		}
 	}
+	s.ReplicaLock.Unlock()
 }
 
 func (s *Server) LeaderStart() {
@@ -459,6 +476,7 @@ func (s *Server) LeaderStart() {
 	s.Timer.Reset(s.HeartbeatTimeout)
 	response := make(chan RaftMessage)
 	for s.State() == LEADER {
+		s.LeaderPid = s.Pid
 		select {
 			case msg := <-s.ConfigChangeNotifier: {
 				util.P_out("RECEIVED %v: Moving into joint consensus!;;;;;;;;;;;;;;;;;;;;;;;;;", msg)
@@ -520,6 +538,7 @@ func (s *Server) LeaderStart() {
 				s.Timer.Reset(s.HeartbeatTimeout)
 
 				go func() {
+					s.ReplicaLock.Lock()
 					for _, r := range s.Replicas {
 						util.P_out("sending heartbeat to %v", r.HostAddress)
 						prevLogIndex := r.GetMatchIndex()
@@ -530,6 +549,7 @@ func (s *Server) LeaderStart() {
 						heartbeat := CreateAppendEntriesMessage(s.MessageId(), s.CurrentTerm(), s.Pid, prevLogIndex, prevLogTerm, entries, leaderCommit)
 						r.SendRaftMessage(heartbeat, response)
 					}
+					s.ReplicaLock.Unlock()
 				}()
 
 				s.Timer.TimeoutAck <- true
@@ -614,7 +634,7 @@ func (s *Server) FollowerStart() {
 			case msg := <-s.ClientInterface: {
 				util.P_out("Not the leader, returning... %s", msg)
 				// s.ClientAck <- false
-				s.ClientAck <- CreateDiffLeaderResponse(s.MessageId(), -1)
+				s.ClientAck <- CreateDiffLeaderResponse(s.MessageId(), s.LeaderPid)
 			}
 		}
 	}
@@ -630,6 +650,7 @@ func (s *Server) Init(Name string, Pid int, HostAddress util.Endpoint, ElectionT
 	s.Timeout = ElectionTimeout
 	s.HeartbeatTimeout = 2
 	s.Lock = &sync.Mutex{}
+	s.ReplicaLock = &sync.Mutex{}
 	s.SetState(FOLLOWER)
 
 	s.Timer = &ElectionTimer{}
@@ -650,11 +671,15 @@ func (s *Server) Init(Name string, Pid int, HostAddress util.Endpoint, ElectionT
 	s.Config.Init()
 
 	s.Config.OldConfig.AddNode(s.Pid, s.HostAddress)	// add myself (since endpoints, pids probably contains only the other peers)
+	s.ReplicaLock.Lock()
 	for _, pid := range nmap.GetKeys() {
 		e := nmap.GetNode(pid)
-		s.Replicas = append(s.Replicas, CreateReplica(e))
+		if e != s.HostAddress {
+			s.Replicas = append(s.Replicas, CreateReplica(e))
+		}
 		s.Config.OldConfig.AddNode(pid, e)
 	}
+	s.ReplicaLock.Unlock()
 	util.P_out("%v", s.Config.OldConfig)
 
 }

@@ -25,9 +25,9 @@ func ClientSocketLoop(HostAddress util.Endpoint, configChangeNotify chan RaftMes
 				EndpointList := util.ReadAllEndpoints(n)
 				nmap := &NodeMap{}
 				for _, e := range EndpointList {
-					if e == HostAddress {
-						continue
-					}
+					// if e == HostAddress {
+					// 	continue
+					// }
 					nmap.AddNode(util.GetPidFromEndpoint(e), e)
 				}
 				configChangeNotify <- CreateClientSizeRequestMessage("configChange", n, *nmap)
@@ -56,9 +56,9 @@ func ClientStdinLoop(HostAddress util.Endpoint, configChangeNotify chan RaftMess
 			EndpointList := util.ReadAllEndpoints(n)
 			nmap := &NodeMap{}
 			for _, e := range EndpointList {
-				if e == HostAddress {
-					continue
-				}
+				// if e == HostAddress {
+				// 	continue
+				// }
 				nmap.AddNode(util.GetPidFromEndpoint(e), e)
 			}
 			configChangeNotify <- CreateClientSizeRequestMessage("configChange", n, *nmap)
