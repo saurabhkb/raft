@@ -9,11 +9,13 @@ Theres basically two levels of logs at work here:
 */
 
 import (
-	"raft/storage"
+	//"raft/storage"
 	"raft/util"
-	"strconv"
+	//"strconv"
 	"fmt"
 	"sync"
+	"os"
+	"bufio"
 )
 
 const (
@@ -24,28 +26,28 @@ const (
 )
 
 var Name string
+var Pid int
 var commitIndex int
 var VolatileLog []Entry
 var dummy Entry
 var lock *sync.Mutex
 
-func Init(name string) {
+func Init(name string, pid int) {
 	Name = name
+	Pid = pid
 	dummy = CreateValueEntry(0, "dummy")
 	VolatileLog = []Entry{dummy}
 	lock = &sync.Mutex{}
 
-	sizeStr, err := storage.Get(fmt.Sprintf("%s:size", Name))
-	_size, _ := strconv.Atoi(sizeStr)
-	if err != nil {
-		storage.Put(fmt.Sprintf("%s:size", Name), "0")
-	}
+	//initSize()
+	_size := fsize()
 
 	// reload saved log
 	for i := 1; i <= _size; i++ {
-		VolatileLog = append(VolatileLog, Get(i))
+		// VolatileLog = append(VolatileLog, get(i))
+		VolatileLog = append(VolatileLog, fget(i))
 	}
-	commitIndex = size()
+	commitIndex = fsize()
 	util.P_out("Reloaded log: %v, commit index: %d", VolatileLog, commitIndex)
 }
 
@@ -80,8 +82,9 @@ func SetCommitIndex(idx int) bool {
 	for i, entry := range VolatileLog {
 		if i > commitIndex && i <= idx {
 			util.P_out("committing VolatileLog[%d] = %v", i, entry)
-			Put(i, entry)
-			IncrSize()
+			//put(i, entry)
+			fappend(entry)
+			//incrSize()
 			commitIndex = i
 		}
 	}
@@ -122,48 +125,12 @@ func Stats() string {
 
 func Saved() []Entry {
 	l := []Entry{}
-	for i := 1; i <= size(); i++ {
-		l = append(l, Get(i))
+	for i := 1; i <= fsize(); i++ {
+		l = append(l, fget(i))
 	}
 	return l
 }
 
-/*
-* log = log[:idx] (if log[idx] isn't committed)
-*/
-// func Truncate(idx, term int) bool {
-// 	lock.Lock()
-// 	defer lock.Unlock()
-// 	util.P_out("before truncate: %v", VolatileLog)
-// 	/*
-// 	* changing this. if idx < commitIndex, let's assume that this server received a duplicate message and is being asked to commit
-// 	* stuff that it has already committed before => return true. BUT also, we need to notify the called (create append entries response) that 
-// 	* the stuff should NOT be appended.
-// 	* however, if idx > len(VolatileLog) - 1, that means this server still needs to catch up (with the leader decrementing its nextindex
-// 	* for this server => return false
-// 	*/
-// 	// if idx < commitIndex || idx > len(VolatileLog) - 1 {	// can't use Top (it deadlocks)
-// 	// 	return false
-// 	// }
-// 	if idx < commitIndex {
-// 		return true
-// 	}
-// 	if idx > len(VolatileLog) - 1 {
-// 		return false
-// 	}
-// 
-// 	if idx > 0 {
-// 		if VolatileLog[idx].Term != term {
-// 			return false
-// 		} else {
-// 			VolatileLog = VolatileLog[:idx + 1]	// include idx in the thing to be kept
-// 		}
-// 	} else {
-// 		VolatileLog = []Entry{dummy}
-// 	}
-// 	util.P_out("after truncate: %v", VolatileLog)
-// 	return true
-// }
 
 func Truncate(idx, term int) string {
 	lock.Lock()
@@ -212,36 +179,84 @@ func GetEntriesAfter(idx int) []Entry {
 }
 
 
+/*
+* FILE interface
+*/
+func fget(idx int) Entry {
+	file, err := os.Open(fmt.Sprintf("log-%d", Pid))
+	if err != nil {
+		return Entry{}
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	i := 1
+	for scanner.Scan() {
+		if i == idx {
+			line := scanner.Text()
+			return fromJson(line)
+		}
+		i++
+	}
+	return Entry{}
+}
+
+func fappend(e Entry) {
+	file, err := os.OpenFile(fmt.Sprintf("log-%d", Pid), os.O_APPEND | os.O_WRONLY | os.O_CREATE, 0666)
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+	json_str := toJson(e)
+	file.WriteString(json_str + "\n")
+}
+
+func fsize() int {
+	file, _ := os.OpenFile(fmt.Sprintf("log-%d", Pid), os.O_RDONLY, 0666)
+	fileScanner := bufio.NewScanner(file)
+	lineCount := 0
+	for fileScanner.Scan() {
+		lineCount++
+	}
+	return lineCount
+}
 
 /*
 * These probably shouldn't be exposed
+* They actually access the storage interface
 */
-func Get(idx int) Entry {
-	val, _ := storage.Get(fmt.Sprintf("%s:%d", Name, idx))
-	return fromJson(val)
-}
+// func get(idx int) Entry {
+// 	val, _ := storage.Get(fmt.Sprintf("%s:%d", Name, idx))
+// 	return fromJson(val)
+// }
+// 
+// func put(idx int, entry Entry) {
+// 	storage.Put(fmt.Sprintf("%s:%d", Name, idx), toJson(entry))
+// }
+// 
+// func size() int {
+// 	ret, _ := storage.Get(fmt.Sprintf("%s:size", Name))
+// 	_size, _ := strconv.Atoi(ret)
+// 	return _size
+// }
+// 
+// func initSize() {
+// 	_, err := storage.Get(fmt.Sprintf("%s:size", Name))
+// 	if err != nil {
+// 		storage.Put(fmt.Sprintf("%s:size", Name), "0")
+// 	}
+// }
+// 
+// func incrSize() {
+// 	sizeStr, err := storage.Get(fmt.Sprintf("%s:size", Name))
+// 	if err == nil {
+// 		size, _ := strconv.Atoi(sizeStr)
+// 		incrSize := strconv.Itoa(size + 1)
+// 		storage.Put(fmt.Sprintf("%s:size", Name), incrSize)
+// 	} else {
+// 		storage.Put(fmt.Sprintf("%s:size", Name), "1")
+// 	}
+// }
 
-func Put(idx int, entry Entry) {
-	storage.Put(fmt.Sprintf("%s:%d", Name, idx), toJson(entry))
-}
-
-func size() int {
-	ret, _ := storage.Get(fmt.Sprintf("%s:size", Name))
-	_size, _ := strconv.Atoi(ret)
-	return _size
-}
-
-func IncrSize() {
-	sizeStr, err := storage.Get(fmt.Sprintf("%s:size", Name))
-	if err == nil {
-		size, _ := strconv.Atoi(sizeStr)
-		incrSize := strconv.Itoa(size + 1)
-		storage.Put(fmt.Sprintf("%s:size", Name), incrSize)
-	} else {
-		storage.Put(fmt.Sprintf("%s:size", Name), "1")
-	}
-}
-
-func Close() {
-	storage.Close()
-}
+// func Close() {
+// 	storage.Close()
+// }
