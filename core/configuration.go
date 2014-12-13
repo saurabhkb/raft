@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"sync"
@@ -15,15 +15,15 @@ const (
 
 
 type Configuration struct {
-	OldConfig NodeMap
-	NewConfig NodeMap
+	OldConfig util.NodeMap
+	NewConfig util.NodeMap
 	state string
 	Lock *sync.Mutex
 }
 
 func (c *Configuration) Init() {
-	c.OldConfig = NodeMap{}
-	c.NewConfig = NodeMap{}
+	c.OldConfig = util.NodeMap{}
+	c.NewConfig = util.NodeMap{}
 	c.state = C_OLD
 	c.Lock = &sync.Mutex{}
 }

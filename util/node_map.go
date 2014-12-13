@@ -1,14 +1,13 @@
-package main
+package util
 
 import (
-	"raft/util"
 	"strconv"
 )
 
 /*
 * go through the hassle of string keys so that it becomes possible to json serialize
 */
-type NodeMap map[string]util.Endpoint
+type NodeMap map[string]Endpoint
 
 func (n *NodeMap) Majority() int {
 	return len(*n) / 2 + 1
@@ -20,7 +19,7 @@ func (n *NodeMap) Clear() {
 	}
 }
 
-func (n *NodeMap) AddNode(pid int, endpoint util.Endpoint) {
+func (n *NodeMap) AddNode(pid int, endpoint Endpoint) {
 	strPid := strconv.Itoa(pid)
 	(*n)[strPid] = endpoint
 }
@@ -34,7 +33,7 @@ func (n *NodeMap) GetKeys() []int {
 	return l
 }
 
-func (n *NodeMap) GetNode(pid int) util.Endpoint {
+func (n *NodeMap) GetNode(pid int) Endpoint {
 	strPid := strconv.Itoa(pid)
 	return (*n)[strPid]
 }

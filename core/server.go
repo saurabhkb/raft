@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"raft/log"
@@ -40,7 +40,7 @@ type Server struct {
 	ClientInterface chan string
 	ClientAck chan RaftMessage
 
-	nodeReplyMap *BoolMap
+	nodeReplyMap *util.BoolMap
 
 	messageCounter int
 
@@ -53,7 +53,7 @@ type Server struct {
 /*
 * Majority (accounting for joint consensus) -> does the passed nodemap constitute a quorum?
 */
-func (s *Server) IsMajority(nmap *BoolMap) bool {
+func (s *Server) IsMajority(nmap *util.BoolMap) bool {
 	currentOld := 0
 	quorumOld := s.Config.OldConfig.Majority()
 	currentNew := 0
@@ -620,7 +620,7 @@ func (s *Server) FollowerStart() {
 /*
 *	Control functions
 */
-func (s *Server) Init(Name string, Pid int, HostAddress util.Endpoint, ElectionTimeout int, nmap *NodeMap, interf chan string, ack chan RaftMessage, configChangeNotify chan RaftMessage) {
+func (s *Server) Init(Name string, Pid int, HostAddress util.Endpoint, ElectionTimeout int, nmap *util.NodeMap, interf chan string, ack chan RaftMessage, configChangeNotify chan RaftMessage) {
 	s.Name = Name
 	s.Pid = Pid
 	s.HostAddress = HostAddress
@@ -641,7 +641,7 @@ func (s *Server) Init(Name string, Pid int, HostAddress util.Endpoint, ElectionT
 	storage.Init("/tmp/raftdb/" + Name)
 	log.Init(Name, Pid)
 
-	s.nodeReplyMap = &BoolMap{}
+	s.nodeReplyMap = &util.BoolMap{}
 
 	s.ConfigChangeNotifier = configChangeNotify
 	s.Config = &Configuration{}

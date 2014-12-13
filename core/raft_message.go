@@ -1,7 +1,8 @@
-package main
+package core
 
 import (
 	"raft/log"
+	"raft/util"
 	"encoding/json"
 	"fmt"
 )
@@ -40,7 +41,7 @@ type RaftMessage struct {
 	VoteGranted bool
 
 	Size int
-	Nodes NodeMap
+	Nodes util.NodeMap
 
 	// for the client
 	Ivalue int
@@ -144,7 +145,7 @@ func CreateVoteResponse(id string, term int, pid int, voteGranted bool) RaftMess
 	return m
 }
 
-func CreateClientSizeRequestMessage(id string, size int, nodeMap NodeMap) RaftMessage {
+func CreateClientSizeRequestMessage(id string, size int, nodeMap util.NodeMap) RaftMessage {
 	m := RaftMessage{}
 	m.Id = id
 	m.Type = RAFT_CLIENT_SIZE_REQ

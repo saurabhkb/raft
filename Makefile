@@ -1,17 +1,17 @@
 alice:
-	go run *.go -name alice
+	go run raft.go -name alice
 
 bob:
-	go run *.go -name bob
+	go run raft.go -name bob
 
 charlie:
-	go run *.go -name charlie
+	go run raft.go -name charlie
 
 dave:
-	go run *.go -name dave -n 5
+	go run raft.go -name dave -n 5
 
 eric:
-	go run *.go -name eric -n 5
+	go run raft.go -name eric -n 5
 
 clean:
 	rm -rf /tmp/raftdb
