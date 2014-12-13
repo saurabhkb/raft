@@ -67,7 +67,7 @@ func (r *Replica) ApplyUpdates(req, res RaftMessage) {
 					// r.MatchTerm = res.Term
 					// r.MatchIndex = r.MatchIndex + len(req.Entries)
 					// r.NextIndex = r.MatchIndex + 1
-					util.P_out("setting replica NextIndex to %d", r.NextIndex)
+					util.P_out("setting replica %v NextIndex to %d", r.HostAddress, r.NextIndex)
 				}
 			} else if res.Term == req.Term && res.LeaderCommit >= r.MatchIndex {
 				r.SetMatchIndex(res.LeaderCommit)
@@ -76,6 +76,9 @@ func (r *Replica) ApplyUpdates(req, res RaftMessage) {
 				// r.MatchIndex = res.LeaderCommit
 				// r.MatchTerm = res.Term
 				// r.NextIndex = r.MatchIndex + 1
+			} else {
+				r.SetNextIndex(r.NextIndex - 1)
+				r.SetMatchIndex(r.MatchIndex - 1)
 			}
 		}
 	}
