@@ -15,3 +15,4 @@ eric:
 
 clean:
 	rm -rf /tmp/raftdb
+	rm log-*
