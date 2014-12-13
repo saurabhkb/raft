@@ -151,7 +151,6 @@ func (s *Server) RespondToRequestVote(voteRequest RaftMessage) RaftMessage {
 		s.SetCurrentTerm(voteRequest.Term)
 	}
 
-
 	// if i haven't voted yet
 	if !s.VotedFor {
 		s.VotedFor = true
@@ -475,43 +474,23 @@ func (s *Server) LeaderStart() {
 	// send a heartbeat TODO
 	s.Timer.Reset(s.HeartbeatTimeout)
 	response := make(chan RaftMessage)
+	// initialize nextIndex state of each replica to log.Top()
+	s.ReplicaLock.Lock()
+	for _, r := range s.Replicas {
+		r.SetNextIndex(log.Top())
+	}
+	s.ReplicaLock.Unlock()
 	for s.State() == LEADER {
 		s.LeaderPid = s.Pid
 		select {
 			case msg := <-s.ConfigChangeNotifier: {
 				util.P_out("RECEIVED %v: Moving into joint consensus!;;;;;;;;;;;;;;;;;;;;;;;;;", msg)
 				go func() {
-					// re-read config file to get new endpoints
-					// TODO update Replicas <- really need a lock on the replicas! (both the old + new)
-					// util.SetConfigFile("config.txt")
-					// endpoints := util.ReadAllEndpoints(msg.Size)
-					// s.Replicas = []*Replica{}
-					// for _, e := range endpoints {
-					// 	if e == s.HostAddress {
-					// 		continue
-					// 	} else {
-					// 		s.Replicas = append(s.Replicas, CreateReplica(e))
-					// 		s.Config.NewConfig.AddNode(util.GetPidFromEndpoint(e), e)
-					// 	}
-					// }
-					// util.P_out("NEW REPLICAS: %v", s.Replicas)
-
-					// // set state as OLD_NEW
-					// s.Config.SetState(C_OLD_NEW)
 					s.MoveIntoJointConsensus(msg.Size)
 					util.P_out("configuration state is %s", s.Config.State())
 
 					// execute joint consensus message
 					s.ExecuteSize(len(s.Config.NewConfig), log.ENTRY_OLD_NEW)
-
-					// // once it commits, set state as NEW
-					// s.Config.SetState(C_NEW)
-
-					// // TODO update Replicas -> only the new ones now
-					// s.Replicas = []*Replica{}
-					// for _, e := range s.Config.GetNewEndpoints() {
-					// 	s.Replicas = append(s.Replicas, CreateReplica(e))
-					// }
 
 					// once that is committed, move into new configuration
 					s.MoveIntoNewConfiguration()
@@ -542,7 +521,6 @@ func (s *Server) LeaderStart() {
 					for _, r := range s.Replicas {
 						util.P_out("sending heartbeat to %v", r.HostAddress)
 						prevLogIndex := r.GetMatchIndex()
-						// prevLogTerm := log.TopTerm()
 						prevLogTerm := log.GetTermFor(prevLogIndex)
 						leaderCommit := log.CommitIndex()
 						entries := log.GetEntriesAfter(prevLogIndex)
@@ -633,7 +611,6 @@ func (s *Server) FollowerStart() {
 			}
 			case msg := <-s.ClientInterface: {
 				util.P_out("Not the leader, returning... %s", msg)
-				// s.ClientAck <- false
 				s.ClientAck <- CreateDiffLeaderResponse(s.MessageId(), s.LeaderPid)
 			}
 		}
@@ -662,7 +639,7 @@ func (s *Server) Init(Name string, Pid int, HostAddress util.Endpoint, ElectionT
 	s.ClientAck = ack
 
 	storage.Init("/tmp/raftdb/" + Name)
-	log.Init(Name)
+	log.Init(Name, Pid)
 
 	s.nodeReplyMap = &BoolMap{}
 
