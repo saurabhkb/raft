@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	zmq "github.com/pebbe/zmq4"

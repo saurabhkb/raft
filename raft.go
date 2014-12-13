@@ -2,6 +2,7 @@ package main
 
 import (
 	"raft/util"
+	"raft/core"
 	"flag"
 	"math/rand"
 	"time"
@@ -10,30 +11,30 @@ import (
 	zmq "github.com/pebbe/zmq4"
 )
 
-func ClientSocketLoop(HostAddress util.Endpoint, configChangeNotify chan RaftMessage, serverConnector chan string, serverAck chan RaftMessage) {
+func ClientSocketLoop(HostAddress util.Endpoint, configChangeNotify chan core.RaftMessage, serverConnector chan string, serverAck chan core.RaftMessage) {
 	clientSocket, _ := zmq.NewSocket(zmq.REP)
 	clientSocket.Bind(HostAddress.ClientTcpFormat())
 	for {
 		msg, _ := clientSocket.Recv(0)
-		clientMsg := FromJson(msg)
+		clientMsg := core.FromJson(msg)
 
 		switch clientMsg.Type {
-			case RAFT_CLIENT_SIZE_REQ: {
+			case core.RAFT_CLIENT_SIZE_REQ: {
 				n := clientMsg.Size
 				util.SetConfigFile("config.txt")
 
 				EndpointList := util.ReadAllEndpoints(n)
-				nmap := &NodeMap{}
+				nmap := &util.NodeMap{}
 				for _, e := range EndpointList {
 					// if e == HostAddress {
 					// 	continue
 					// }
 					nmap.AddNode(util.GetPidFromEndpoint(e), e)
 				}
-				configChangeNotify <- CreateClientSizeRequestMessage("configChange", n, *nmap)
+				configChangeNotify <- core.CreateClientSizeRequestMessage("configChange", n, *nmap)
 				<-serverAck
 			}
-			case RAFT_CLIENT_VALUE_REQ: {
+			case core.RAFT_CLIENT_VALUE_REQ: {
 				str := strconv.Itoa(clientMsg.Ivalue)
 				serverConnector <- str
 				<-serverAck
@@ -42,7 +43,7 @@ func ClientSocketLoop(HostAddress util.Endpoint, configChangeNotify chan RaftMes
 	}
 }
 
-func ClientStdinLoop(HostAddress util.Endpoint, configChangeNotify chan RaftMessage, serverConnector chan string, serverAck chan RaftMessage) {
+func ClientStdinLoop(HostAddress util.Endpoint, configChangeNotify chan core.RaftMessage, serverConnector chan string, serverAck chan core.RaftMessage) {
 	for {
 		var s string
 		fmt.Printf("Input:")
@@ -54,14 +55,14 @@ func ClientStdinLoop(HostAddress util.Endpoint, configChangeNotify chan RaftMess
 			util.SetConfigFile("config.txt")
 
 			EndpointList := util.ReadAllEndpoints(n)
-			nmap := &NodeMap{}
+			nmap := &util.NodeMap{}
 			for _, e := range EndpointList {
 				// if e == HostAddress {
 				// 	continue
 				// }
 				nmap.AddNode(util.GetPidFromEndpoint(e), e)
 			}
-			configChangeNotify <- CreateClientSizeRequestMessage("configChange", n, *nmap)
+			configChangeNotify <- core.CreateClientSizeRequestMessage("configChange", n, *nmap)
 
 		} else {
 			serverConnector <- s
@@ -85,7 +86,7 @@ func main() {
 	_, ServerName, Pid, _, _, HostAddress := util.GetConfigDetailsFromName(*namePtr)
 
 	EndpointList := util.ReadAllEndpoints(*numPtr)
-	init_nmap := NodeMap{}
+	init_nmap := util.NodeMap{}
 
 	for _, e := range EndpointList {
 		if e == HostAddress {
@@ -98,12 +99,12 @@ func main() {
 	TIMER_DURATION := int(float32(MIN_ELECTION_TIMEOUT) + rand.Float32() * float32(MAX_ELECTION_TIMEOUT - MIN_ELECTION_TIMEOUT))
 	util.P_out("TIMER_DURATION: %d", TIMER_DURATION)
 
-	configChangeNotify := make(chan RaftMessage)
+	configChangeNotify := make(chan core.RaftMessage)
 	serverConnector := make(chan string)
-	serverAck := make(chan RaftMessage)
+	serverAck := make(chan core.RaftMessage)
 
 	go func() {
-		s := Server{}
+		s := core.Server{}
 		s.Init(ServerName, Pid, HostAddress, TIMER_DURATION, &init_nmap, serverConnector, serverAck, configChangeNotify)
 		s.Start()
 	}()
