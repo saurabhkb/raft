@@ -7,7 +7,6 @@ import (
 	"math/rand"
 	"time"
 	"fmt"
-	"strconv"
 	zmq "github.com/pebbe/zmq4"
 )
 
@@ -18,28 +17,28 @@ func ClientSocketLoop(HostAddress util.Endpoint, configChangeNotify chan core.Ra
 		msg, _ := clientSocket.Recv(0)
 		clientMsg := core.FromJson(msg)
 
+		util.P_out("received: %v", clientMsg)
+
+		var reply core.RaftMessage
 		switch clientMsg.Type {
 			case core.RAFT_CLIENT_SIZE_REQ: {
-				n := clientMsg.Size
+				n := clientMsg.Ivalue
 				util.SetConfigFile("config.txt")
 
 				EndpointList := util.ReadAllEndpoints(n)
 				nmap := &util.NodeMap{}
 				for _, e := range EndpointList {
-					// if e == HostAddress {
-					// 	continue
-					// }
 					nmap.AddNode(util.GetPidFromEndpoint(e), e)
 				}
 				configChangeNotify <- core.CreateClientSizeRequestMessage("configChange", n, *nmap)
-				<-serverAck
+				reply = <-serverAck
 			}
 			case core.RAFT_CLIENT_VALUE_REQ: {
-				str := strconv.Itoa(clientMsg.Ivalue)
-				serverConnector <- str
-				<-serverAck
+				serverConnector <- clientMsg.Value
+				reply = <-serverAck
 			}
 		}
+		clientSocket.Send(reply.ToJson(), 0)
 	}
 }
 
@@ -48,7 +47,6 @@ func ClientStdinLoop(HostAddress util.Endpoint, configChangeNotify chan core.Raf
 		var s string
 		fmt.Printf("Input:")
 		fmt.Scanf("%s", &s)
-		util.P_out("read: %s", s)
 		if s[0] == '#' {
 			n := int(s[1] - '0')
 			fmt.Println(n)
@@ -57,17 +55,13 @@ func ClientStdinLoop(HostAddress util.Endpoint, configChangeNotify chan core.Raf
 			EndpointList := util.ReadAllEndpoints(n)
 			nmap := &util.NodeMap{}
 			for _, e := range EndpointList {
-				// if e == HostAddress {
-				// 	continue
-				// }
 				nmap.AddNode(util.GetPidFromEndpoint(e), e)
 			}
 			configChangeNotify <- core.CreateClientSizeRequestMessage("configChange", n, *nmap)
 
 		} else {
 			serverConnector <- s
-			ret := <-serverAck
-			util.P_out("RET:%v", ret)
+			<-serverAck
 		}
 	}
 }
@@ -97,7 +91,6 @@ func main() {
 
 	rand.Seed(time.Now().UnixNano() / int64(time.Second))
 	TIMER_DURATION := int(float32(MIN_ELECTION_TIMEOUT) + rand.Float32() * float32(MAX_ELECTION_TIMEOUT - MIN_ELECTION_TIMEOUT))
-	util.P_out("TIMER_DURATION: %d", TIMER_DURATION)
 
 	configChangeNotify := make(chan core.RaftMessage)
 	serverConnector := make(chan string)
@@ -109,6 +102,6 @@ func main() {
 		s.Start()
 	}()
 
-	ClientStdinLoop(HostAddress, configChangeNotify, serverConnector, serverAck)
-	//ClientSocketLoop(HostAddress, configChangeNotify, serverConnector, serverAck)
+	//ClientStdinLoop(HostAddress, configChangeNotify, serverConnector, serverAck)
+	ClientSocketLoop(HostAddress, configChangeNotify, serverConnector, serverAck)
 }

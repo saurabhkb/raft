@@ -70,20 +70,9 @@ func (s *Server) IsMajority(nmap *util.BoolMap) bool {
 		}
 	}
 	if s.Config.State() == C_OLD {
-		util.P_out("currentOld:%d, quorumOld:%d, old:%v", currentOld, quorumOld, s.Config.OldConfig)
 		return currentOld >= quorumOld
 	}
 	if s.Config.State() == C_OLD_NEW {
-		if currentNew >= quorumNew {
-			util.P_out("=====> PASSED THE NEW CONFIGURATION QUORUM!")
-		} else {
-			util.P_out("=====> FAILED THE NEW CONFIGURATION QUORUM!")
-		}
-		if currentOld >= quorumOld {
-			util.P_out("=====> PASSED THE OLD CONFIGURATION QUORUM!")
-		} else {
-			util.P_out("=====> FAILED THE OLD CONFIGURATION QUORUM!")
-		}
 		return (currentNew >= quorumNew) && (currentOld >= quorumOld)
 	}
 	if s.Config.State() == C_NEW {
@@ -136,7 +125,6 @@ func (s *Server) RespondToRequestVote(voteRequest RaftMessage) RaftMessage {
 	// if the candidate's last log index is not at least as up to date as our own, rejecr
 	// this was initially after the term checks
 	if log.Top() > voteRequest.LastLogIndex || log.TopTerm() > voteRequest.LastLogTerm {
-		util.P_out("!!!!!!!!!!! CANT VOTE FOR YOU! You aren't as recent as me!: %v", util.GetEndpointFromPid(voteRequest.FromPid))
 		return CreateVoteResponse(voteRequest.Id, s.CurrentTerm(), s.Pid, false)
 	}
 
@@ -167,7 +155,6 @@ func (s *Server) RespondToRequestVote(voteRequest RaftMessage) RaftMessage {
 func (s *Server) RespondToAppendEntry(appendEntryRequest RaftMessage) RaftMessage {
 	// if stale term, reject it
 	if s.CurrentTerm() > appendEntryRequest.Term {
-		util.P_out("stale term: %d > %d", s.CurrentTerm(), appendEntryRequest.Term)
 		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), false)
 	}
 
@@ -188,41 +175,30 @@ func (s *Server) RespondToAppendEntry(appendEntryRequest RaftMessage) RaftMessag
 	status_code := log.Truncate(appendEntryRequest.PrevLogIndex, appendEntryRequest.PrevLogTerm)
 	switch status_code {
 		case log.ERROR_IDX_LT_COMMIT: {
-			util.P_out(log.ERROR_IDX_LT_COMMIT)
 			return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), true)
 		}
 		case log.ERROR_IDX_GT_COMMIT: {
-			util.P_out(log.ERROR_IDX_GT_COMMIT)
 			return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), false)
 		}
 		case log.ERROR_MISMATCHED_TERMS: {
-			util.P_out(log.ERROR_MISMATCHED_TERMS)
 			return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), false)
 		}
 		default: {
-			util.P_out("pass!")
 		}
 	}
-	// if !success {
-	// 	util.P_out("cannot truncate properly")
-	// 	return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), false)
-	// }
 
 	for i := 0; i < len(appendEntryRequest.Entries); i++ {
 		success := log.Append(appendEntryRequest.Entries[i])
 		if !success {
-			util.P_out("cannot append properly")
 			return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), false)
 		}
 	}
 
 	success := log.SetCommitIndex(appendEntryRequest.LeaderCommit)
 	if !success {
-		util.P_out("")
 		return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), false)
 	}
 
-	util.P_out("%s", log.Stats())
 	return CreateAppendEntriesResponse(appendEntryRequest.Id, s.CurrentTerm(), s.Pid, log.CommitIndex(), true)
 }
 
@@ -244,9 +220,7 @@ func (s *Server) RespondToAppendEntryResponse(appendEntryResponse RaftMessage) b
 			// 	return false
 			// }
 
-			util.P_out("nodeReplyMap:%v", *(s.nodeReplyMap))
 			if !s.IsMajority(s.nodeReplyMap) {
-				util.P_out("no majority!")
 				return false
 			}
 
@@ -258,17 +232,13 @@ func (s *Server) RespondToAppendEntryResponse(appendEntryResponse RaftMessage) b
 			}
 			s.ReplicaLock.Unlock()
 			sort.Ints(indices)
-			util.P_out("indices: %v", indices)
 
 			c_idx := indices[s.Config.OldConfig.Majority() - 1]	// TODO for now, take the smaller commit index just to be sure (in case it is joint consensus)
 			if c_idx > log.CommitIndex() {
-				ret := log.SetCommitIndex(c_idx)
-				util.P_out("setting commit index to: %d (%v)", c_idx, ret)
+				log.SetCommitIndex(c_idx)
 			}
-			util.P_out(":::::::::::::::: true!")
 			return true
 		}
-		util.P_out("returning false , failure")
 		return false
 	}
 }
@@ -297,9 +267,8 @@ func (s *Server) execute(entry log.Entry) RaftMessage {
 	// prevLogIndex := log.Top()
 	// prevLogTerm := log.TopTerm()
 	leaderCommit := log.CommitIndex()
-	util.P_out("Trying to append entry: %v", log.Append(entry))
+	log.Append(entry)
 
-	util.P_out("%v", log.Stats())
 
 	// our own
 	s.nodeReplyMap.Clear()
@@ -322,20 +291,16 @@ func (s *Server) execute(entry log.Entry) RaftMessage {
 	for {
 		select {
 			case msg := <-response: {
-				util.P_out("%v", msg)
 				if s.RespondToAppendEntryResponse(msg) {
-					util.P_out("BREAKING>>>>>>>>>>>>>>>>>>>>>>>>>")
 					return CreateClientValueResponse(s.MessageId(), true)
 				}
 			}
 			case <-s.Timer.TimeoutEvent: {
-				util.P_out("heartbeat!")
 				s.Timer.Reset(s.HeartbeatTimeout)
 
 				go func() {
 					s.ReplicaLock.Lock()
 					for _, r := range s.Replicas {
-						util.P_out("sending heartbeat to %v", r.HostAddress)
 						// prevLogIndex := log.Top()
 						// prevLogTerm := log.TopTerm()
 						// leaderCommit := log.CommitIndex()
@@ -358,7 +323,6 @@ func (s *Server) execute(entry log.Entry) RaftMessage {
 		}
 	}
 	// probably shouldn't come here
-	util.P_out(">>>>>>>>>>>> RETURNING")
 	return CreateClientValueResponse(s.MessageId(), false)
 }
 
@@ -376,9 +340,7 @@ func (s *Server) CandidateStart() {
 	go func() {
 		s.ReplicaLock.Lock()
 		for _, r := range s.Replicas {
-			util.P_out("sending vote request to %v", r.HostAddress)
 			voteRequest := CreateVoteRequestMessage(s.MessageId(), s.CurrentTerm(), s.Pid, log.Top(), log.TopTerm())	//TODO
-			util.P_out("voteReq:%v", voteRequest)
 			r.SendRaftMessage(voteRequest, response)
 		}
 		s.ReplicaLock.Unlock()
@@ -391,24 +353,16 @@ func (s *Server) CandidateStart() {
 	for s.State() == CANDIDATE {
 		select {
 			case msg := <-response: {
-				util.P_out("initiate election: %v", msg)
 				switch msg.Type {
 					case RAFT_VOTE_REP: {
 						if msg.VoteGranted {
 							s.nodeReplyMap.Set(msg.FromPid, true)
-							util.P_out("got vote! numVotes is now: %v", *s.nodeReplyMap)
 
 							if s.IsMajority(s.nodeReplyMap) {
-								util.P_out("Yahoo!")
 								s.SetState(LEADER)
 								s.nodeReplyMap.Clear()
 								return
 							}
-							// if numVotes >= s.Majority {
-							// 	util.P_out("Yahoo!")
-							// 	s.SetState(LEADER)
-							// 	return
-							// }
 						} else {
 							if s.CurrentTerm() < msg.Term {
 								s.SetState(FOLLOWER)
@@ -421,21 +375,13 @@ func (s *Server) CandidateStart() {
 				}
 			}
 			case <-s.Timer.TimeoutEvent: {
-				util.P_out("timeout!")
 				s.Timer.Reset(s.Timeout)
 				s.Timer.TimeoutAck <- true
 			}
-			case msg := <-s.ClientInterface: {
-				util.P_out("Not the leader, returning... %s", msg)
+			case <-s.ClientInterface: {
 				s.ClientAck <- CreateDiffLeaderResponse(s.MessageId(), s.LeaderPid)
 			}
 		}
-		// was initially here but break simply breaks out of the switch, not the for
-		// if numVotes > s.Majority {
-		// 	util.P_out("Yahoo!")
-		// 	s.SetState(LEADER)
-		// 	break
-		// }
 	}
 }
 
@@ -484,10 +430,8 @@ func (s *Server) LeaderStart() {
 		s.LeaderPid = s.Pid
 		select {
 			case msg := <-s.ConfigChangeNotifier: {
-				util.P_out("RECEIVED %v: Moving into joint consensus!;;;;;;;;;;;;;;;;;;;;;;;;;", msg)
 				go func() {
 					s.MoveIntoJointConsensus(msg.Size)
-					util.P_out("configuration state is %s", s.Config.State())
 
 					// execute joint consensus message
 					s.ExecuteSize(len(s.Config.NewConfig), log.ENTRY_OLD_NEW)
@@ -503,7 +447,7 @@ func (s *Server) LeaderStart() {
 				}()
 			}
 			case msg := <-response: {
-				util.P_out("on response, received: %v", msg)
+				util.P_out("RECV %v", msg)
 				if msg.Term > s.CurrentTerm() {
 					s.SetCurrentTerm(msg.Term)
 					s.SetState(FOLLOWER)
@@ -513,13 +457,11 @@ func (s *Server) LeaderStart() {
 				}
 			}
 			case <-s.Timer.TimeoutEvent: {
-				util.P_out("heartbeat!")
 				s.Timer.Reset(s.HeartbeatTimeout)
 
 				go func() {
 					s.ReplicaLock.Lock()
 					for _, r := range s.Replicas {
-						util.P_out("sending heartbeat to %v", r.HostAddress)
 						prevLogIndex := r.GetMatchIndex()
 						prevLogTerm := log.GetTermFor(prevLogIndex)
 						leaderCommit := log.CommitIndex()
@@ -533,7 +475,7 @@ func (s *Server) LeaderStart() {
 				s.Timer.TimeoutAck <- true
 			}
 			case msg := <-s.Sresponder.ReceiveEvent: {
-				util.P_out("received raft message!: %v", msg)
+				util.P_out("RECV %v", msg)
 				var reply RaftMessage
 				switch msg.Type {
 					case RAFT_APPEND_REQ: {
@@ -541,22 +483,18 @@ func (s *Server) LeaderStart() {
 						reply = s.RespondToAppendEntry(msg)
 					}
 					case RAFT_APPEND_REP: {
-						util.P_out("received appendEntry response!: %v", msg)
 					}
 					case RAFT_VOTE_REQ: {
 						s.Timer.Reset(s.Timeout)
 						reply = s.RespondToRequestVote(msg)
 					}
 					case RAFT_VOTE_REP: {
-						util.P_out("received vote response!: %v", msg)
 					}
 				}
 				s.Sresponder.SendChannel <- reply
 			}
 			case val := <-s.ClientInterface: {
-				util.P_out("I am the leader, going to do something... %s", val)
 				response := s.ExecuteClient(val)
-				util.P_out("done executing ====================================")
 				s.ClientAck <- response
 			}
 		}
@@ -567,15 +505,14 @@ func (s *Server) FollowerStart() {
 	for s.State() == FOLLOWER {
 		select {
 			case <-s.Timer.TimeoutEvent: {
-				util.P_out("time's up!")
 				s.Timer.Reset(s.Timeout)
 				s.Timer.TimeoutAck <- true
 				s.SetState(CANDIDATE)
 				break
 			}
 			case msg := <-s.Sresponder.ReceiveEvent: {
-				util.P_out("received raft message!: %v", msg)
 				var reply RaftMessage
+				util.P_out("RECV %v", msg)
 				switch msg.Type {
 					case RAFT_APPEND_REQ: {
 						// check the entry type (if it is a SIZE request, update our Replicas) and change our state to joint consensus
@@ -584,18 +521,14 @@ func (s *Server) FollowerStart() {
 						// so we don't care if it commits or not, change our configuration anyway
 						for _, e := range msg.Entries {
 							if e.Vtype == log.ENTRY_OLD_NEW {
-								util.P_out("HEY! JOINT CONSENSUS!")
 								if s.Config.State() == C_OLD {
 									// move into joint consensus
 									s.MoveIntoJointConsensus(e.Size)
-									util.P_out("moved into state %v", s.Config.State())
 								}
 							} else if e.Vtype == log.ENTRY_NEW {
 								if s.Config.State() == C_OLD_NEW {
-									util.P_out("HEY! JOINT CONSENSUS => new config!")
 									s.MoveIntoNewConfiguration()
 									s.Config.ConsensusComplete()
-									util.P_out("config change complete!")
 								}
 							}
 						}
@@ -609,8 +542,7 @@ func (s *Server) FollowerStart() {
 				}
 				s.Sresponder.SendChannel <- reply
 			}
-			case msg := <-s.ClientInterface: {
-				util.P_out("Not the leader, returning... %s", msg)
+			case <-s.ClientInterface: {
 				s.ClientAck <- CreateDiffLeaderResponse(s.MessageId(), s.LeaderPid)
 			}
 		}
@@ -657,7 +589,6 @@ func (s *Server) Init(Name string, Pid int, HostAddress util.Endpoint, ElectionT
 		s.Config.OldConfig.AddNode(pid, e)
 	}
 	s.ReplicaLock.Unlock()
-	util.P_out("%v", s.Config.OldConfig)
 
 }
 

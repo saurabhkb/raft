@@ -1,6 +1,9 @@
 package log
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 const (
 	_ = iota
@@ -16,6 +19,26 @@ type Entry struct {
 	Term int
 	Value string
 	Size int
+}
+
+func (e Entry) String() string {
+	switch e.Vtype {
+		case ENTRY_OLD_NEW: {
+			return fmt.Sprintf("C_OLD_NEW Term:%d Size:%d", e.Term, e.Size)
+		}
+		case ENTRY_NEW: {
+			return fmt.Sprintf("C_NEW Term:%d Size:%d", e.Term, e.Size)
+		}
+		case ENTRY_CLIENT: {
+			return fmt.Sprintf("VALUE Term:%d Value:%s", e.Term, e.Value)
+		}
+		case ENTRY_SIZE: {
+			return fmt.Sprintf("SIZE Term:%d Size:%d", e.Term, e.Size)
+		}
+		default: {
+			return fmt.Sprintf("ENTRY Term:%d Value:%s", e.Term, e.Value)
+		}
+	}
 }
 
 func toJson(e Entry) string {

@@ -6,18 +6,12 @@ DATABASE INTERFACE
 =======================
 */
 
-import (
-	"fmt"
-)
-
 import "github.com/syndtr/goleveldb/leveldb"
 
 var db *leveldb.DB
 
 func Init(dbpath string) {
-	var e error
-	db, e = leveldb.OpenFile(dbpath, nil)
-	fmt.Println("DB ERROR", e)
+	db, _ = leveldb.OpenFile(dbpath, nil)
 }
 
 func Get(key string) (string, error) {

@@ -44,8 +44,7 @@ func (c *Configuration) ConsensusComplete() {
 func (c *Configuration) GetOldConfigPids() []int {
 	l := []int{}
 	for k := range c.OldConfig {
-		intk, err := strconv.Atoi(k)
-		fmt.Println("ERRL", err)
+		intk, _ := strconv.Atoi(k)
 		l = append(l, intk)
 	}
 	return l

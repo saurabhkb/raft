@@ -3,7 +3,6 @@ package core
 import (
 	"time"
 	"sync"
-	"raft/util"
 )
 
 const TIME_UNIT = 1
@@ -33,7 +32,6 @@ func (e *ElectionTimer) Start() {
 				case <-ticker.C: {
 					e.lock.Lock()
 					e.Time--
-					util.P_out("time: %d", e.Time)
 					if e.Time == 0 {
 						e.lock.Unlock()
 

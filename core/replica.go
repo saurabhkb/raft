@@ -39,10 +39,15 @@ func (r *Replica) SendRaftMessage(req RaftMessage, replyChan chan RaftMessage) {
 		socket, _ := zmq.NewSocket(zmq.REQ)
 		socket.Connect(r.HostAddress.RepTcpFormat())
 
+		util.P_out("SEND %v", req)
+
 		s := req.ToJson()
 		socket.Send(s, 0)
 		response, _ := socket.Recv(0)
 		msg := FromJson(response)
+
+		util.P_out("RECV %v", msg)
+
 		r.ApplyUpdates(req, msg)
 		replyChan <- msg
 	}()
@@ -67,7 +72,6 @@ func (r *Replica) ApplyUpdates(req, res RaftMessage) {
 					// r.MatchTerm = res.Term
 					// r.MatchIndex = r.MatchIndex + len(req.Entries)
 					// r.NextIndex = r.MatchIndex + 1
-					util.P_out("setting replica %v NextIndex to %d", r.HostAddress, r.NextIndex)
 				}
 			} else if res.Term == req.Term && res.LeaderCommit >= r.MatchIndex {
 				r.SetMatchIndex(res.LeaderCommit)
