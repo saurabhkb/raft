@@ -45,6 +45,7 @@ type RaftMessage struct {
 
 	// for the client
 	Ivalue int
+	Value string
 }
 
 func (r RaftMessage) String() string {
@@ -74,7 +75,7 @@ func (r RaftMessage) String() string {
 			return s
 		}
 		case RAFT_CLIENT_VALUE_REQ: {
-			s := fmt.Sprintf("RAFT_CLIENT_VALUE_REQ: Ivalue:%d, Success:%v", r.Ivalue, r.Success)
+			s := fmt.Sprintf("RAFT_CLIENT_VALUE_REQ: Value:%s, Success:%v", r.Value, r.Success)
 			return s
 		}
 		case RAFT_CLIENT_VALUE_REPLY: {
@@ -167,6 +168,14 @@ func CreateClientValueResponse(id string, success bool) RaftMessage {
 	m.Id = id
 	m.Type = RAFT_CLIENT_VALUE_REPLY
 	m.Success = success
+	return m
+}
+
+func CreateClientValueRequest(id string, value string) RaftMessage {
+	m := RaftMessage{}
+	m.Id = id
+	m.Type = RAFT_CLIENT_VALUE_REQ
+	m.Value = value
 	return m
 }
 

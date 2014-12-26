@@ -50,7 +50,6 @@ func SetConfigFile(configfile string) {
 		}
 		lineNumber += 1
 	}
-	P_out("CONFIG FILE STRUCT: %v", configFileStructure)
 }
 
 func ReadAllEndpoints(num int) []Endpoint {
@@ -59,7 +58,6 @@ func ReadAllEndpoints(num int) []Endpoint {
 		e := configFileStructure[i].HostAddress
 		endpoints = append(endpoints, e)
 	}
-	P_out("Endpoints: %v", endpoints)
 	return endpoints
 }
 

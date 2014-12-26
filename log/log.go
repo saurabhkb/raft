@@ -48,11 +48,9 @@ func Init(name string, pid int) {
 		VolatileLog = append(VolatileLog, fget(i))
 	}
 	commitIndex = fsize()
-	util.P_out("Reloaded log: %v, commit index: %d", VolatileLog, commitIndex)
 }
 
 func Append(entry Entry) bool {
-	util.P_out("======+> APPENDING ENTRY: %v", entry)
 	lock.Lock()
 	defer lock.Unlock()
 	volatileLogSize := len(VolatileLog)
@@ -78,14 +76,11 @@ func SetCommitIndex(idx int) bool {
 		return false
 	}
 
-	util.P_out("attempting to set commit index as %d", idx)
 	for i, entry := range VolatileLog {
 		if i > commitIndex && i <= idx {
-			util.P_out("committing VolatileLog[%d] = %v", i, entry)
-			//put(i, entry)
 			fappend(entry)
-			//incrSize()
 			commitIndex = i
+			util.P_out("COMMIT [%v] commitIndex=%d", entry, commitIndex)
 		}
 	}
 	return true
@@ -135,7 +130,6 @@ func Saved() []Entry {
 func Truncate(idx, term int) string {
 	lock.Lock()
 	defer lock.Unlock()
-	util.P_out("before truncate: %v", VolatileLog)
 	if idx < commitIndex {
 		return ERROR_IDX_LT_COMMIT
 	}
@@ -152,7 +146,6 @@ func Truncate(idx, term int) string {
 	} else {
 		VolatileLog = []Entry{dummy}
 	}
-	util.P_out("after truncate: %v", VolatileLog)
 	return TRUNCATE_SUCCESS
 }
 
