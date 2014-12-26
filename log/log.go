@@ -9,37 +9,45 @@ Theres basically two levels of logs at work here:
 */
 
 import (
-	"raft/storage"
+	//"raft/storage"
 	"raft/util"
-	"strconv"
+	//"strconv"
 	"fmt"
 	"sync"
+	"os"
+	"bufio"
+)
+
+const (
+	ERROR_IDX_LT_COMMIT = "ERROR_IDX_LT_COMMIT"
+	ERROR_IDX_GT_COMMIT = "ERROR_IDX_GT_COMMIT"
+	ERROR_MISMATCHED_TERMS = "ERROR_MISMATCHED_TERMS"
+	TRUNCATE_SUCCESS = "TRUNCATE_SUCCESS"
 )
 
 var Name string
+var Pid int
 var commitIndex int
 var VolatileLog []Entry
 var dummy Entry
 var lock *sync.Mutex
 
-func Init(name string) {
+func Init(name string, pid int) {
 	Name = name
-	dummy = Entry{-1, "DUMMY"}
+	Pid = pid
+	dummy = CreateValueEntry(0, "dummy")
 	VolatileLog = []Entry{dummy}
 	lock = &sync.Mutex{}
 
-	sizeStr, err := storage.Get(fmt.Sprintf("%s:size", Name))
-	_size, _ := strconv.Atoi(sizeStr)
-	if err != nil {
-		storage.Put(fmt.Sprintf("%s:size", Name), "0")
-	}
+	//initSize()
+	_size := fsize()
 
 	// reload saved log
 	for i := 1; i <= _size; i++ {
-		VolatileLog = append(VolatileLog, Get(i))
+		// VolatileLog = append(VolatileLog, get(i))
+		VolatileLog = append(VolatileLog, fget(i))
 	}
-	commitIndex = size()
-	util.P_out("Reloaded log: %v, commit index: %d", VolatileLog, commitIndex)
+	commitIndex = fsize()
 }
 
 func Append(entry Entry) bool {
@@ -68,13 +76,11 @@ func SetCommitIndex(idx int) bool {
 		return false
 	}
 
-	util.P_out("attempting to set commit index as %d", idx)
 	for i, entry := range VolatileLog {
 		if i > commitIndex && i <= idx {
-			util.P_out("committing VolatileLog[%d] = %v", i, entry)
-			Put(i, entry)
-			IncrSize()
+			fappend(entry)
 			commitIndex = i
+			util.P_out("COMMIT [%v] commitIndex=%d", entry, commitIndex)
 		}
 	}
 	return true
@@ -114,34 +120,33 @@ func Stats() string {
 
 func Saved() []Entry {
 	l := []Entry{}
-	for i := 0; i <= size(); i++ {
-		l = append(l, Get(i))
+	for i := 1; i <= fsize(); i++ {
+		l = append(l, fget(i))
 	}
 	return l
 }
 
-/*
-* log = log[:idx] (if log[idx] isn't committed)
-*/
-func Truncate(idx, term int) bool {
+
+func Truncate(idx, term int) string {
 	lock.Lock()
 	defer lock.Unlock()
-	util.P_out("before truncate: %v", VolatileLog)
-	if idx < commitIndex || idx > len(VolatileLog) - 1 {	// can't use Top (it deadlocks)
-		return false
+	if idx < commitIndex {
+		return ERROR_IDX_LT_COMMIT
+	}
+	if idx > len(VolatileLog) - 1 {
+		return ERROR_IDX_GT_COMMIT
 	}
 
 	if idx > 0 {
 		if VolatileLog[idx].Term != term {
-			return false
+			return ERROR_MISMATCHED_TERMS
 		} else {
 			VolatileLog = VolatileLog[:idx + 1]	// include idx in the thing to be kept
 		}
 	} else {
 		VolatileLog = []Entry{dummy}
 	}
-	util.P_out("after truncate: %v", VolatileLog)
-	return true
+	return TRUNCATE_SUCCESS
 }
 
 func GetTermFor(idx int) int {
@@ -167,36 +172,84 @@ func GetEntriesAfter(idx int) []Entry {
 }
 
 
+/*
+* FILE interface
+*/
+func fget(idx int) Entry {
+	file, err := os.Open(fmt.Sprintf("log-%d", Pid))
+	if err != nil {
+		return Entry{}
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	i := 1
+	for scanner.Scan() {
+		if i == idx {
+			line := scanner.Text()
+			return fromJson(line)
+		}
+		i++
+	}
+	return Entry{}
+}
+
+func fappend(e Entry) {
+	file, err := os.OpenFile(fmt.Sprintf("log-%d", Pid), os.O_APPEND | os.O_WRONLY | os.O_CREATE, 0666)
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+	json_str := toJson(e)
+	file.WriteString(json_str + "\n")
+}
+
+func fsize() int {
+	file, _ := os.OpenFile(fmt.Sprintf("log-%d", Pid), os.O_RDONLY, 0666)
+	fileScanner := bufio.NewScanner(file)
+	lineCount := 0
+	for fileScanner.Scan() {
+		lineCount++
+	}
+	return lineCount
+}
 
 /*
 * These probably shouldn't be exposed
+* They actually access the storage interface
 */
-func Get(idx int) Entry {
-	val, _ := storage.Get(fmt.Sprintf("%s:%d", Name, idx))
-	return fromJson(val)
-}
+// func get(idx int) Entry {
+// 	val, _ := storage.Get(fmt.Sprintf("%s:%d", Name, idx))
+// 	return fromJson(val)
+// }
+// 
+// func put(idx int, entry Entry) {
+// 	storage.Put(fmt.Sprintf("%s:%d", Name, idx), toJson(entry))
+// }
+// 
+// func size() int {
+// 	ret, _ := storage.Get(fmt.Sprintf("%s:size", Name))
+// 	_size, _ := strconv.Atoi(ret)
+// 	return _size
+// }
+// 
+// func initSize() {
+// 	_, err := storage.Get(fmt.Sprintf("%s:size", Name))
+// 	if err != nil {
+// 		storage.Put(fmt.Sprintf("%s:size", Name), "0")
+// 	}
+// }
+// 
+// func incrSize() {
+// 	sizeStr, err := storage.Get(fmt.Sprintf("%s:size", Name))
+// 	if err == nil {
+// 		size, _ := strconv.Atoi(sizeStr)
+// 		incrSize := strconv.Itoa(size + 1)
+// 		storage.Put(fmt.Sprintf("%s:size", Name), incrSize)
+// 	} else {
+// 		storage.Put(fmt.Sprintf("%s:size", Name), "1")
+// 	}
+// }
 
-func Put(idx int, entry Entry) {
-	storage.Put(fmt.Sprintf("%s:%d", Name, idx), toJson(entry))
-}
-
-func size() int {
-	ret, _ := storage.Get(fmt.Sprintf("%s:size", Name))
-	_size, _ := strconv.Atoi(ret)
-	return _size
-}
-
-func IncrSize() {
-	sizeStr, err := storage.Get(fmt.Sprintf("%s:size", Name))
-	if err == nil {
-		size, _ := strconv.Atoi(sizeStr)
-		incrSize := strconv.Itoa(size + 1)
-		storage.Put(fmt.Sprintf("%s:size", Name), incrSize)
-	} else {
-		storage.Put(fmt.Sprintf("%s:size", Name), "1")
-	}
-}
-
-func Close() {
-	storage.Close()
-}
+// func Close() {
+// 	storage.Close()
+// }

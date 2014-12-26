@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"raft/util"
@@ -39,10 +39,15 @@ func (r *Replica) SendRaftMessage(req RaftMessage, replyChan chan RaftMessage) {
 		socket, _ := zmq.NewSocket(zmq.REQ)
 		socket.Connect(r.HostAddress.RepTcpFormat())
 
+		util.P_out("SEND %v", req)
+
 		s := req.ToJson()
 		socket.Send(s, 0)
 		response, _ := socket.Recv(0)
 		msg := FromJson(response)
+
+		util.P_out("RECV %v", msg)
+
 		r.ApplyUpdates(req, msg)
 		replyChan <- msg
 	}()
@@ -50,17 +55,23 @@ func (r *Replica) SendRaftMessage(req RaftMessage, replyChan chan RaftMessage) {
 
 func (r *Replica) ApplyUpdates(req, res RaftMessage) {
 	switch req.Type {
-		case APPENDENTRIES_REQ: {
+		case RAFT_APPEND_REQ: {
 			if res.Success {
 				if len(req.Entries) > 0 {
 					// this is not a heartbeat
 					r.SetMatchTerm(res.Term)
-					r.SetMatchIndex(r.MatchIndex + len(req.Entries))
+					// instead of doing this, lets set it to req.PrevLogIndex + len(req.Entries)
+					// because if we get this multiple times, bad things happen
+					//r.SetMatchIndex(r.MatchIndex + len(req.Entries))
+
+					if r.MatchIndex < req.PrevLogIndex + len(req.Entries) {
+						r.MatchIndex = req.PrevLogIndex + len(req.Entries)
+					}
+
 					r.SetNextIndex(r.MatchIndex + 1)
 					// r.MatchTerm = res.Term
 					// r.MatchIndex = r.MatchIndex + len(req.Entries)
 					// r.NextIndex = r.MatchIndex + 1
-					util.P_out("setting replica NextIndex to %d", r.NextIndex)
 				}
 			} else if res.Term == req.Term && res.LeaderCommit >= r.MatchIndex {
 				r.SetMatchIndex(res.LeaderCommit)
@@ -69,6 +80,9 @@ func (r *Replica) ApplyUpdates(req, res RaftMessage) {
 				// r.MatchIndex = res.LeaderCommit
 				// r.MatchTerm = res.Term
 				// r.NextIndex = r.MatchIndex + 1
+			} else {
+				r.SetNextIndex(r.NextIndex - 1)
+				r.SetMatchIndex(r.MatchIndex - 1)
 			}
 		}
 	}
